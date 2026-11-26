@@ -1,0 +1,5 @@
+[submodule "cnig"]
+	path = cnig
+	url = https://github.com/cnigfr/DDU-SG5-SYMBOLISATION.git
+	branch = SYMBOLISATION
+	shallow = true

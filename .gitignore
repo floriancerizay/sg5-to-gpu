@@ -1,0 +1,11 @@
+.venv/
+.env
+__pycache__/
+
+# Sorties intermédiaires de ./run.sh : tout data/ se régénère
+/data/*
+# sauf les index archivés (comparaison avec une version CNIG antérieure : bin/cnig_index.py --since <sha>)
+!/data/cnig_index.*.json
+
+# Planche : suivie en git (publiée par GitHub Pages), sauf les fichiers de travail
+/report/qgis_jobs.json

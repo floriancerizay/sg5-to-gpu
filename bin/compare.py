@@ -1,0 +1,574 @@
+#!/usr/bin/env python3
+"""
+5. Planche de comparaison des symboles CNIG, colonnes
+  attendu (catalogue PDF CNIG) | QGIS (QML CNIG) | Script | problèmes du symbole d'origine | prod actuelle
+
+1. Grille de test data/layer/compare.gpkg : une couche par (domaine, couche GPU), géométries des vignettes du
+   catalogue (TEMPLATES, extraites des PDF vectoriels). Prescriptions et informations : une cellule par fiche
+   « tt-ss_nnn » où surface, ligne et point reprennent le gabarit de la fiche ; zones : la croix des fiches
+   de zonage ; SUP : le polygone des fiches SUP.
+   Attributs : symbole + attributs métier (typepsc/stypepsc, typeinf/stypeinf, typezone, suptype, typeass…).
+2. Styles publiés sur le GeoServer local (workspace GEOSERVER_CMP_WORKSPACE) :
+   prod = STYLES/data/du/<couche>.sld (ou SLDS/sup/sup/assiette_sup_s.sld) appliqué aux attributs métier,
+   script = SLD par code de l'étape 3 (règles « symbole = code »).
+3. Une image GetMap par (couche, style) + une image QGIS (bin/render_qgis.py), superposées par fiche.
+4. Écart au rendu QGIS par code → data/symbols/scores.json (signalé au-delà de DEVIATION).
+5. report/compare.html ; problèmes : data/symbols/issues.json (étape 3) + écart au rendu QGIS.
+
+Prérequis : étapes 1 à 3, GeoServer local démarré, PyQGIS (sauf --skip-qgis).
+Usage : bin/compare.py [--sections plu_prescription,...] [--skip-qgis]
+"""
+import argparse
+import csv
+import hashlib
+import html
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import numpy as np
+from PIL import Image, ImageChops, ImageFilter
+from scipy import ndimage
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import (CNIG_DIR, CNIG_INDEX, FONTS_DIR, GEOMETRY_NAME, GEOSERVER_CMP_IMG, GEOSERVER_CMP_WORKSPACE,
+                    GEOSERVER_FONTS, GPKG, PROD_IMG_DIR, QGIS_PYTHON, REPORT_DIR, ROOT, SCRIPT_DIR, STYLES_DIR, SVG_DIR,
+                    SYMBOLS_DIR, read_json, write_json)
+import geoserver
+import sld_normalize as N
+from qml2sld import ogc_conditions
+
+SCORES = SYMBOLS_DIR / "scores.json"
+ISSUES = SYMBOLS_DIR / "issues.json"
+
+CELL, STEP, COLS, RES = 60.0, 80.0, 10, 0.5  # m, m, colonnes, m/px  (≈ 1:1800)
+X0, Y0 = 700000.0, 6600000.0
+TILE = int(STEP / RES)
+FIELDS = ["id", "code", "label", "classement", "symbole", "typepsc", "stypepsc", "typeinf", "stypeinf",
+          "typezone", "typesect", "suptype", "typeass", "type", "idass", "txt", "libelle"]
+VARIANTS = ("qgis", "script", "prod")  # rendus calculés
+MAIN_VARIANTS = ("qgis", "script")  # colonnes avant les problèmes ; « prod actuelle » tout à droite
+VARIANT_TITLES = {"qgis": "QGIS (QML CNIG)", "prod": "prod actuelle", "script": "Script"}
+DEVIATION = 5.0  # écart au rendu QGIS au-delà duquel le symbole est signalé
+MAX_SHIFT = 16  # px : décalage de phase des trames toléré par la métrique
+PEAKS = 6  # maxima de corrélation essayés
+QML = {
+    ("plu", "info_lin"): ["PLU/QGIS/QML/INFO_LIN.qml"],
+    ("plu", "info_pct"): ["PLU/QGIS/QML/INFO_PCT.qml"],
+    ("plu", "info_surf"): ["PLU/QGIS/QML/INFO_SURF.qml"],
+    ("plu", "prescription_lin"): ["PLU/QGIS/QML/PRESCRIPTION_LIN.qml"],
+    ("plu", "prescription_pct"): ["PLU/QGIS/QML/PRESCRIPTION_PCT.qml"],
+    ("plu", "prescription_surf"): ["PLU/QGIS/QML/PRESCRIPTION_SURF.qml"],
+    ("plu", "zone_urba"): ["PLU/QGIS/QML/plu_zone_urba_pe.qml", "PLU/QGIS/QML/plu_zone_urba_ge.qml"],
+    ("psmv", "info_lin"): ["PSMV/QGIS/QML/psmv_inf_l.qml"],
+    ("psmv", "info_pct"): ["PSMV/QGIS/QML/psmv_inf_p.qml"],
+    ("psmv", "info_surf"): ["PSMV/QGIS/QML/psmv_inf_s.qml"],
+    ("psmv", "prescription_lin"): ["PSMV/QGIS/QML/psmv_psc_l.qml"],
+    ("psmv", "prescription_pct"): ["PSMV/QGIS/QML/psmv_psc_p.qml"],
+    ("psmv", "prescription_surf"): ["PSMV/QGIS/QML/psmv_psc_s.qml"],
+    ("psmv", "zone_urba"): ["PSMV/QGIS/QML/psmv_zone_urba.qml"],
+    ("sup", "symbole"): ["SUP/QGIS/QML/sup_ass.qml"],
+    ("sup", "assiette"): ["SUP/QGIS/QML/ASSIETTE_SUP_S.qml"],
+}
+GEOM_LETTER = {"S": "surf.", "L": "lin.", "P": "pct."}
+# Géométries des vignettes du catalogue CNIG (tracés vectoriels des PDF, repère du cadre ramené à [-1, 1],
+# y vers le haut) : fiche prescription / information (PLU p. 70), fiche de zonage (PLU p. 5)
+TEMPLATES = {
+    "sheet_S": [(-0.3997, -0.7774), (-0.5784, -0.7555), (-0.7555, -0.5329), (-0.7774, 0.1771), (-0.6223, 0.2225),
+                (-0.5784, 0.2006), (-0.489, 0.0674), (-0.3778, 0.022), (-0.2884, 0.0), (-0.2445, 0.022),
+                (-0.2007, 0.0674), (-0.1771, 0.1113), (-0.2225, 0.2225), (-0.2884, 0.3103), (-0.3103, 0.4436),
+                (-0.2664, 0.489), (-0.1771, 0.4671), (0.0439, 0.4436), (0.2445, 0.3778), (0.3558, 0.2445),
+                (0.3997, 0.1113), (0.3777, 0.0), (0.4216, -0.2226), (0.489, -0.2884), (0.5329, -0.511),
+                (0.4671, -0.5784), (0.2665, -0.6222), (0.1552, -0.6003), (-0.1332, -0.511), (-0.2007, -0.5549),
+                (-0.2445, -0.6881), (-0.3339, -0.7555)],
+    "sheet_L": [(0.5549, 0.3339), (0.7774, -0.1113), (0.7335, -0.7774)],
+    "sheet_P": [(0.5643, 0.6583)],
+    "zone_S": [(-0.7774, -0.511), (-0.7774, 0.0439), (-0.511, 0.0439), (-0.511, 0.2884), (0.0, 0.2884),
+               (0.0, 0.5548), (0.7774, 0.5548), (0.7774, -0.2226), (0.2665, -0.2226), (0.2665, -0.7774),
+               (-0.2664, -0.7774), (-0.2664, -0.511)],
+}
+
+
+def _fit(points, margin=.92):
+    """Polygone recentré et agrandi pour occuper le cadre (fiches SUP : même polygone, plein cadre)."""
+    xs, ys = [p[0] for p in points], [p[1] for p in points]
+    cx, cy, half = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, max(max(xs) - min(xs), max(ys) - min(ys)) / 2
+    return [((x - cx) / half * margin, (y - cy) / half * margin) for x, y in points]
+
+
+TEMPLATES["sup_S"] = _fit(TEMPLATES["sheet_S"])
+
+
+def geom_of(layer):
+    """Géométrie d'une couche de la grille : S (surface), L (ligne) ou P (point)."""
+    return "L" if layer.endswith("_lin") else "P" if layer.endswith("_pct") else "S"
+
+
+# --- 1. Grille de test --------------------------------------------------------------------------
+
+def cell_origin(i):
+    """Coin haut-gauche de la cellule i de la grille (COLS colonnes, pas de STEP m)."""
+    col, row = i % COLS, i // COLS
+    pad = (STEP - CELL) / 2
+    return X0 + col * STEP + pad, Y0 - row * STEP - pad
+
+
+def wkt(geom, i, shape):
+    """Géométrie de la cellule i d'après le gabarit du catalogue ; shape : sheet (fiche prescription /
+    information), zone ou sup."""
+    x, y = cell_origin(i)
+    key = f"{shape}_{geom}" if f"{shape}_{geom}" in TEMPLATES else f"sheet_{geom}"
+    pts = [(x + CELL / 2 * (1 + u), y - CELL / 2 * (1 - v)) for u, v in TEMPLATES[key]]
+    text = ", ".join(f"{px:.3f} {py:.3f}" for px, py in pts)
+    if geom == "P":
+        return f"POINT({text})"
+    if geom == "L":
+        return f"LINESTRING({text})"
+    return f"POLYGON(({text}, {pts[0][0]:.3f} {pts[0][1]:.3f}))"
+
+
+def shape_of(name):
+    """Gabarit de vignette d'une couche : zone (croix des fiches de zonage), sup ou sheet (fiche PSC / INF)."""
+    return "zone" if "zone_urba" in name or "secteur" in name else "sup" if name.startswith("sup_") else "sheet"
+
+
+def bbox(n):
+    """(emprise, taille en px) d'une grille de n cellules."""
+    rows = max(1, -(-n // COLS))
+    return [X0, Y0 - rows * STEP, X0 + COLS * STEP, Y0], [int(COLS * STEP / RES), int(rows * STEP / RES)]
+
+
+def build_sections():
+    """(couches, sections). couches : nom → lignes ; sections : nom → {layers, groups, sheet, n}."""
+    index = read_json(CNIG_INDEX)
+    layers, sections = {}, {}
+
+    def add(section, layer, key, row, sheet):
+        sec = sections.setdefault(section, {"layers": [], "groups": {}, "sheet": sheet})
+        if layer not in sec["layers"]:
+            sec["layers"].append(layer)
+        key = key if sheet else f"{len(sec['groups']):04d}"
+        sec["groups"].setdefault(key, {})[layer] = row
+        layers.setdefault(layer, []).append(row)
+
+    for e in index["entries"]:
+        row = {"code": e["code"], "label": e.get("label") or "", "classement": e.get("classement") or "",
+               "symbole": e["code"], "domain": e["domain"], **e["attrs"]}
+        if e["domain"] == "sup":
+            row["idass"] = f"{e['attrs']['suptype']}-test"
+            add("sup_symbole", "sup_symbole", None, row, False)
+        elif e["layer"].startswith(("prescription", "info")):
+            fam = e["layer"].split("_")[0]
+            a = e["attrs"]
+            key = f"{a.get('typepsc') or a.get('typeinf')}-{a.get('stypepsc') or a.get('stypeinf')}_{e['variant']}"
+            add(f"{e['domain']}_{fam}", f"{e['domain']}_{e['layer']}", key, row, True)
+        else:
+            add(f"{e['domain']}_{e['layer']}", f"{e['domain']}_{e['layer']}", None, row, False)
+    for r in read_json(SCRIPT_DIR / "sup_rules.json", []):
+        add("sup_assiette", "sup_assiette", None, {
+            "code": r["label"], "label": r["label"], "classement": "règle", "suptype": r["suptype"] or "",
+            "domain": "sup", "idass": f"{(r['suptype'] or '').upper()}-test", **r["attrs"],
+        }, False)
+
+    for sec in sections.values():
+        keys = sorted(sec["groups"])
+        sec["groups"] = [{"key": k, "cell": i, "codes": sec["groups"][k]} for i, k in enumerate(keys)]
+        sec["n"] = len(keys)
+        for g in sec["groups"]:
+            for row in g["codes"].values():
+                row["cell"], row["sheet"] = g["cell"], sec["sheet"]
+    return layers, sections
+
+
+def write_gpkg(layers):
+    """Grille de test : une couche GeoPackage par couche de la planche (via CSV + ogr2ogr)."""
+    GPKG.parent.mkdir(parents=True, exist_ok=True)
+    GPKG.unlink(missing_ok=True)
+    tmp = GPKG.parent / "compare_csv"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir()
+    for name, rows in layers.items():
+        path = tmp / f"{name}.csv"
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(FIELDS + ["WKT"])
+            for i, r in enumerate(rows):
+                w.writerow([i + 1] + [r.get(k, "") for k in FIELDS[1:]] + [wkt(geom_of(name), r["cell"], shape_of(name))])
+        subprocess.run(["ogr2ogr", "-f", "GPKG", GPKG, path, "-oo", "GEOM_POSSIBLE_NAMES=WKT",
+                        "-oo", "AUTODETECT_TYPE=NO", "-a_srs", "EPSG:2154", "-nln", name,
+                        "-lco", f"GEOMETRY_NAME={GEOMETRY_NAME}"]
+                       + (["-update"] if GPKG.exists() else []), check=True)
+    shutil.rmtree(tmp)
+
+
+# --- 2. Styles ----------------------------------------------------------------------------------
+
+def geoserver_href(href, sub="", src=None):
+    """href local GeoServer + empreinte du contenu (v=…) : GeoServer garde les images en cache par URL,
+    un pictogramme modifié sous le même nom resterait affiché dans son ancienne version."""
+    url = N.normalize_href(href, f"file://{GEOSERVER_CMP_IMG}/{sub}")
+    path = (src or SVG_DIR) / url.split("?")[0].rsplit("/", 1)[-1]
+    if path.is_file():
+        url += ("&" if "?" in url else "?") + "v=" + hashlib.sha1(path.read_bytes()).hexdigest()[:10]
+    return url
+
+
+def prod_style(name):
+    """SLD de production d'une couche de la planche, pictogrammes servis depuis GEOSERVER_CMP_IMG/prod ; ou None."""
+    domain, _, layer = name.partition("_")
+    if domain == "sup":
+        path = STYLES_DIR / "SLDS/sup/sup/assiette_sup_s.sld" if layer == "assiette" else None
+    else:
+        path = STYLES_DIR / "data/du" / f"{layer}.sld"
+    if not path or not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8")
+    # pictogrammes de production dans un sous-dossier : 24 portent le nom d'un SVG CNIG au dessin différent
+    return re.sub(r'xlink:href="([^"]+)"',
+                  lambda m: f'xlink:href="{html.escape(geoserver_href(html.unescape(m.group(1)), "prod/", PROD_IMG_DIR))}"', text)
+
+
+def script_style(name, rows):
+    """SLD « symbole = code » d'une couche, depuis data/symbols/script ; assiettes SUP : règles d'ASSIETTE_SUP_S."""
+    rules = []
+    if name == "sup_assiette":
+        for r in read_json(SCRIPT_DIR / "sup_rules.json"):
+            rules.append(N.rule_xml(r["label"], r["label"], ogc_conditions(r["suptype"], r["attrs"]), _symbolizers(r)))
+    else:
+        domain = name.split("_")[0]
+        index = read_json(SCRIPT_DIR / "index.json")
+        for row in rows:
+            entry = index.get(f"{domain}:{row['code']}")
+            if entry:
+                rules.append(N.rule_xml(row["code"], row["label"], [("symbole", row["code"])], _symbolizers(entry)))
+    return N.sld_document(f"script_{name}", rules) if rules else None
+
+
+def _symbolizers(entry):
+    """Symboliseurs d'un SLD par code, images servies depuis GEOSERVER_CMP_IMG."""
+    syms = N.symbolizers(N.rules(N.parse(SCRIPT_DIR / entry["file"]))[0])
+    for s in syms:
+        for res in s.iter(f"{{{N.NS_SLD}}}OnlineResource"):
+            res.set(f"{{{N.NS_XLINK}}}href", geoserver_href(res.get(f"{{{N.NS_XLINK}}}href")))
+    return syms
+
+
+# --- GeoServer ----------------------------------------------------------------------------------
+
+def install_resources():
+    """SVG → GEOSERVER_CMP_IMG, polices → styles/fonts (redémarrage GeoServer si nouvelle police)."""
+    img = Path(GEOSERVER_CMP_IMG)
+    img.mkdir(parents=True, exist_ok=True)
+    for f in SVG_DIR.glob("*"):
+        shutil.copyfile(f, img / f.name)
+    (img / "prod").mkdir(exist_ok=True)
+    for f in list(PROD_IMG_DIR.glob("*.svg")) + list(PROD_IMG_DIR.glob("*.png")):
+        shutil.copyfile(f, img / "prod" / f.name)
+    # data/fonts : rempli par bin/convert_symbols.py (polices des symboles et des étiquettes)
+    fonts = Path(GEOSERVER_FONTS)
+    fonts.mkdir(parents=True, exist_ok=True)
+    new = [f.name for f in FONTS_DIR.glob("*") if not (fonts / f.name).exists()]
+    for f in FONTS_DIR.glob("*"):
+        shutil.copyfile(f, fonts / f.name)
+    if new:
+        print(f"  ⚠ nouvelles polices copiées dans {fonts} : {new} — redémarrer GeoServer pour les charger")
+
+
+def publish(styles):
+    """Workspace de comparaison recréé : grille de test et styles."""
+    ws = GEOSERVER_CMP_WORKSPACE
+    code, body = geoserver.recreate_workspace(ws)
+    assert geoserver.ok(code), body
+    code, body = geoserver.add_geopackage(ws, "compare", GPKG)
+    assert geoserver.ok(code), body
+    for name, text in styles.items():
+        code, body = geoserver.add_style(ws, name, text)
+        if not geoserver.ok(code):
+            print(f"  ⚠ style {name} : {code} {body[:300]!r}")
+
+
+def getmap(layer, style, box, size, out):
+    """Rendu GeoServer d'une couche de la planche dans le fichier `out`."""
+    data, error = geoserver.getmap(GEOSERVER_CMP_WORKSPACE, layer, style, box, size)
+    if error is not None:
+        print(f"  ⚠ GetMap {layer}/{style} : {error!r}")
+        return
+    out.write_bytes(data)
+
+
+# --- 3. Superposition par fiche, 4. choix du moteur ---------------------------------------------
+
+def composite(paths, out):
+    """Superpose des rendus sur fond blanc (pixel le plus sombre)."""
+    imgs = [Image.open(p).convert("RGB") for p in paths if p.is_file()]
+    if not imgs:
+        return False
+    acc = imgs[0]
+    for im in imgs[1:]:
+        acc = ImageChops.darker(acc, im)
+    acc.save(out)
+    return True
+
+
+def _rgb(path):
+    return np.asarray(Image.open(path).convert("RGB").filter(ImageFilter.GaussianBlur(2)), dtype=float)
+
+
+def distance(img, ref):
+    """Écart moyen (0-255, RVB) entre deux tuiles, après recalage de la phase des trames.
+
+    QGIS cale les motifs de remplissage sur l'emprise de l'objet, GeoServer sur l'origine de l'image :
+    on essaie les décalages (≤ MAX_SHIFT px) des principaux maxima de corrélation croisée et on garde
+    l'écart minimal (sans décalage compris).
+    """
+    plain = float(np.abs(img - ref).mean())
+    g, r = img.mean(axis=2), ref.mean(axis=2)
+    g, r = g - g.mean(), r - r.mean()
+    xc = np.fft.fftshift(np.fft.irfft2(np.fft.rfft2(r) * np.conj(np.fft.rfft2(g)), s=r.shape))
+    h, w = r.shape
+    c = MAX_SHIFT
+    win = xc[h // 2 - c:h // 2 + c + 1, w // 2 - c:w // 2 + c + 1]
+    # maxima locaux de la corrélation : le plus fort est souvent le contour, pas la trame
+    peaks = (win == ndimage.maximum_filter(win, size=5)) & (win > 0)
+    cands = [(int(py) - c, int(px) - c) for py, px in sorted(zip(*np.nonzero(peaks)), key=lambda p: -win[p])[:PEAKS]]
+    if plain > 3:  # écart notable : on complète par une grille grossière de décalages
+        cands += [(dy, dx) for dy in range(-8, 9, 2) for dx in range(-8, 9, 2)]
+    best = plain
+    for dy, dx in cands:
+        if (dy, dx) != (0, 0):
+            shifted = np.roll(img, (dy, dx), axis=(0, 1))
+            best = min(best, float(np.abs(shifted - ref)[c:-c, c:-c].mean()))  # bords enroulés exclus
+    return best
+
+
+def compute_scores(layers, img_dir):
+    """Écart au rendu QGIS par code (codes tirés directement d'un QML, cellule QGIS non vide)."""
+    idx = read_json(SCRIPT_DIR / "index.json")
+    scores = {}
+    for name, rows in layers.items():
+        paths = {v: img_dir / f"{v}_{name}.png" for v in ("qgis", "script")}
+        if not all(p.is_file() for p in paths.values()) or name == "sup_assiette":
+            continue
+        qgis, script = _rgb(paths["qgis"]), _rgb(paths["script"])
+        for r in rows:
+            key = f"{r['domain']}:{r['code']}"
+            col, row = r["cell"] % COLS, r["cell"] // COLS
+            sl = (slice(row * TILE, (row + 1) * TILE), slice(col * TILE, (col + 1) * TILE))
+            if key in idx and not idx[key]["source"].startswith("=") and qgis[sl].min() < 250:
+                scores[key] = round(distance(script[sl], qgis[sl]), 2)
+    write_json(SCORES, scores)
+    return scores
+
+
+# --- 5. Planche HTML ----------------------------------------------------------------------------
+
+PAGE = """<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><title>Comparaison symboles CNIG</title>
+<style>
+body {{ font: 13px system-ui, sans-serif; margin: 16px; background: #fff; color: #222; }}
+table {{ border-collapse: collapse; }} td, th {{ border-bottom: 1px solid #ddd; padding: 4px 8px; vertical-align: middle; }}
+th {{ position: sticky; top: 0; background: #f4f4f4; text-align: left; z-index: 1; }}
+.t {{ width: {tile}px; height: {tile}px; background-repeat: no-repeat; border: 1px solid #ccc; }}
+.na {{ width: {tile}px; height: {tile}px; display: flex; align-items: center; justify-content: center; color: #aaa; border: 1px dashed #ddd; }}
+.cnig {{ max-width: {tile}px; max-height: {tile}px; }}
+code {{ font-size: 12px; }} .lab {{ max-width: 280px; }}
+tr > :first-child {{ width: 130px; max-width: 130px; font-size: 11px; overflow-wrap: anywhere; }}
+tr > :first-child code {{ font-size: 11px; }} .cls {{ color: #777; font-size: 12px; }}
+.pb {{ font-size: 12px; max-width: 360px; }} .pb .w {{ color: #b45309; }} .pb .i {{ color: #777; }} .pb .ok {{ color: #2a7; }}
+nav a {{ margin-right: 10px; }}
+tr.sec td {{ background: #e8eef7; font-weight: 600; font-size: 15px; padding: 10px 8px; }}
+tr.sec .n {{ font-weight: normal; font-size: 13px; color: #555; }}
+.print {{ float: right; }}
+.filter {{ margin: 8px 0 12px; padding: 6px 10px; background: #f4f4f4; display: inline-block; }}
+.filter label {{ margin-right: 14px; cursor: pointer; }}
+/* filtre : seulement les fiches avec un problème « ⚠ » ou une remarque « ℹ » ; sections vides masquées */
+body.only-notes tbody tr:not(.sec):not(.has-note),
+body.only-notes tbody[data-note="0"] {{ display: none; }}
+/* impression (bouton « Imprimer / PDF », Ctrl+P) : A4 paysage, en-tête répété, une fiche jamais coupée */
+@page {{ size: A4 landscape; margin: 8mm; }}
+@media print {{
+  * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+  body {{ margin: 0; zoom: 0.72; }}
+  nav, .print, .filter {{ display: none; }}
+  th {{ position: static; }}
+  thead {{ display: table-header-group; }}
+  tr {{ break-inside: avoid; }}
+  tr.sec {{ break-after: avoid; }}
+  tbody + tbody tr.sec {{ break-before: page; }}
+  .lab {{ max-width: 220px; }} .pb {{ max-width: 300px; }}
+}}
+</style></head><body>
+<button class="print" onclick="window.print()">Imprimer / PDF</button>
+<h1>Comparaison des symboles CNIG — rendu GeoServer et QGIS</h1>
+<p>CNIG <code>{sha}</code>. Échelle ≈ 1:{scale}. <b>attendu</b> : vignette du catalogue PDF CNIG.
+<b>QGIS</b> : QML CNIG d'origine rendu par QGIS. <b>prod</b> : STYLES actuels appliqués aux attributs métier.
+<b>Script</b> : SLD produit automatiquement à partir des QML CNIG (bin/qml2sld.py).
+Géométries de test : celles des vignettes du catalogue (surface, ligne et point superposés pour les fiches
+prescriptions / informations).
+<b>problèmes du symbole d'origine</b> : « ⚠ » défaut ou partie non reproductible, « ℹ » information ;
+écart au rendu QGIS signalé au-delà de {deviation}.</p>
+<nav>{nav}</nav>
+<div class="filter"><label><input type="checkbox" id="only-notes"> n'afficher que les fiches avec un problème
+« ⚠ » ou une remarque « ℹ » : {n_note} sur {n_all} (dont {n_warn} avec « ⚠ »)</label></div>
+{sections}
+<script>
+document.getElementById("only-notes").addEventListener("change", e =>
+  document.body.classList.toggle("only-notes", e.target.checked));
+</script>
+</body></html>"""
+
+
+def tile(img, i):
+    """Cellule du tableau : portion i de l'image d'une section (ou « — »)."""
+    if img is None:
+        return '<td><div class="na">—</div></td>'
+    col, row = i % COLS, i // COLS
+    return (f'<td><div class="t" style="background-image:url(img/{img});'
+            f'background-position:-{col * TILE}px -{row * TILE}px"></div></td>')
+
+
+def problems(key, scores, issues):
+    """Problèmes d'un code : diagnostics de convert_symbols + écart au rendu QGIS."""
+    out = list(issues.get(key, []))
+    d = scores.get(key)
+    if d is not None and d > DEVIATION:
+        out.append(f"⚠ écart au rendu QGIS : {d:.1f}")
+    return out
+
+
+def _problem_html(items):
+    return "".join(f'<div class="{"w" if p.startswith("⚠") else "i"}">{html.escape(p)}</div>' for p in items)
+
+
+def plate(name):
+    """Cellule du tableau : vignette du catalogue CNIG (ou « — »)."""
+    if not name:
+        return '<td><div class="na">—</div></td>'
+    return f'<td><img class="cnig" src="cnig/{html.escape(name)}" alt=""></td>'
+
+
+def write_html(sections, images, scores, sha):
+    plates = read_json(REPORT_DIR / "cnig/plates.json", {})
+    issues = read_json(ISSUES, {})
+    # un seul tableau : mêmes colonnes sur toute la page, une ligne de titre par section
+    head = ("<tr><th>code</th><th>libellé</th><th>attendu (catalogue CNIG)</th>"
+            + "".join(f"<th>{VARIANT_TITLES[v]}</th>" for v in MAIN_VARIANTS) + "<th>problèmes du symbole d'origine</th>"
+            + f"<th>{VARIANT_TITLES['prod']}</th></tr>")
+    ncols = 4 + len(VARIANTS)
+    html_sections, nav = [], []
+    totals = {"all": 0, "warn": 0, "note": 0}  # fiches : toutes, avec « ⚠ », avec « ⚠ » ou « ℹ »
+    for name, sec in sections.items():
+        body = []
+        n_warn = n_note = 0
+        for g in sec["groups"]:
+            rows = [g["codes"][l] for l in sec["layers"] if l in g["codes"]]
+            first = rows[0]
+            codes = "<br>".join(
+                (f"{GEOM_LETTER[geom_of(l)]} " if sec["sheet"] else "") + f"<code>{html.escape(g['codes'][l]['code'])}</code>"
+                for l in sec["layers"] if l in g["codes"])
+            pl = next((plates[f"{r['domain']}:{r['code']}"] for r in rows if f"{r['domain']}:{r['code']}" in plates), None)
+            detail, found = [], []
+            for l in sec["layers"]:
+                if l not in g["codes"]:
+                    continue
+                r = g["codes"][l]
+                items = problems(f"{r['domain']}:{r['code']}", scores, issues)
+                if items:
+                    prefix = f"<b>{GEOM_LETTER[geom_of(l)]}</b> " if sec["sheet"] else ""
+                    detail.append(prefix + _problem_html(items))
+                    found += items
+            if pl is None and name != "sup_assiette":
+                missing = "ℹ pas de vignette dans le catalogue CNIG"
+                detail.append(_problem_html([missing]))
+                found.append(missing)
+            warn = any(p.startswith("⚠") for p in found)
+            n_warn += warn
+            n_note += bool(found)
+            body.append(('<tr class="has-note">' if found else "<tr>")
+                        + f"<td>{codes}<div class=cls>{html.escape(first['classement'])}</div></td>"
+                        f"<td class=lab>{html.escape(first['label'])}</td>" + plate(pl)
+                        + "".join(tile(images.get((name, v)), g["cell"]) for v in MAIN_VARIANTS)
+                        + f"<td class=pb>{''.join(detail) or '<span class=ok>—</span>'}</td>"
+                        + tile(images.get((name, "prod")), g["cell"]) + "</tr>")
+        n = len(sec["groups"])
+        totals["all"] += n
+        totals["warn"] += n_warn
+        totals["note"] += n_note
+        nav.append(f'<a href="#{name}">{name}</a>')
+        html_sections.append(
+            f'<tbody data-note="{n_note}"><tr class="sec" id="{name}"><td colspan="{ncols}">'
+            f'{name} <span class="n">{n} fiches · {n_warn} avec « ⚠ » · {n_note} avec remarque</span></td></tr>'
+            + "".join(body) + "</tbody>")
+    (REPORT_DIR / "compare.html").write_text(
+        PAGE.format(tile=TILE, sha=sha, scale=int(RES / 0.00028), nav=" ".join(nav), deviation=f"{DEVIATION:g}",
+                    n_all=totals["all"], n_warn=totals["warn"], n_note=totals["note"],
+                    sections="<table><thead>" + head + "</thead>" + "\n".join(html_sections) + "</table>"),
+        encoding="utf-8")
+    return totals
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--sections", help="sous-ensemble de sections (ex. plu_prescription,sup_assiette)")
+    ap.add_argument("--skip-qgis", action="store_true")
+    args = ap.parse_args()
+
+    layers, sections = build_sections()
+    if args.sections:
+        sections = {k: v for k, v in sections.items() if k in args.sections.split(",")}
+        keep = {l for s in sections.values() for l in s["layers"]}
+        layers = {k: v for k, v in layers.items() if k in keep}
+    size_of = {l: s["n"] for s in sections.values() for l in s["layers"]}
+    write_gpkg(layers)
+    print(f"✅ {GPKG.relative_to(ROOT)} : {sum(map(len, layers.values()))} entités, {len(layers)} couches")
+
+    styles = {}
+    for name, rows in layers.items():
+        for variant, text in (("prod", prod_style(name)), ("script", script_style(name, rows))):
+            if text:
+                styles[f"{variant}_{name}"] = text
+    install_resources()
+    publish(styles)
+    print(f"✅ GeoServer {GEOSERVER_CMP_WORKSPACE} : {len(styles)} styles")
+
+    img_dir = REPORT_DIR / "img"
+    shutil.rmtree(img_dir, ignore_errors=True)
+    img_dir.mkdir(parents=True)
+    jobs = []
+    for name in layers:
+        box, size = bbox(size_of[name])
+        for variant in ("prod", "script"):
+            style = f"{variant}_{name}"
+            if style in styles:
+                getmap(name, style, box, size, img_dir / f"{style}.png")
+        domain, _, layer = name.partition("_")
+        qmls = QML.get((domain, layer))
+        if qmls and not args.skip_qgis:
+            jobs.append({"gpkg": str(GPKG), "layer": name, "qmls": [str(CNIG_DIR / q) for q in qmls], "bbox": box,
+                         "size": size, "out": str(img_dir / f"qgis_{name}.png"), "fonts": [str(FONTS_DIR)]})
+    if jobs:
+        jobs_file = REPORT_DIR / "qgis_jobs.json"
+        write_json(jobs_file, jobs)
+        subprocess.run([QGIS_PYTHON, str(ROOT / "bin/render_qgis.py"), str(jobs_file)], check=True)
+
+    scores = compute_scores(layers, img_dir)
+    flagged = sum(1 for d in scores.values() if d > DEVIATION)
+    print(f"✅ écarts au rendu QGIS : {len(scores)} codes mesurés, {flagged} au-delà de {DEVIATION:g} → "
+          f"{SCORES.relative_to(ROOT)}")
+
+    images = {}
+    for name, sec in sections.items():
+        for v in VARIANTS:
+            out = img_dir / f"sec_{v}_{name}.png"
+            if composite([img_dir / f"{v}_{l}.png" for l in sec["layers"]], out):
+                images[(name, v)] = out.name
+
+    totals = write_html(sections, images, scores, (read_json(CNIG_INDEX).get("sha") or "")[:7])
+    print(f"✅ {(REPORT_DIR / 'compare.html').relative_to(ROOT)} : {totals['all']} fiches, {totals['warn']} avec « ⚠ », "
+          f"{totals['note']} avec remarque")
+
+
+if __name__ == "__main__":
+    main()

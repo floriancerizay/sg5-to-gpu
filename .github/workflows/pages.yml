@@ -1,0 +1,37 @@
+# Publication de la planche (report/, générée en local par ./run.sh puis commitée) sur GitHub Pages.
+# Aucun calcul en CI : la chaîne demande GeoServer et QGIS (voir README).
+# Réglage du dépôt : Settings → Pages → Source : « GitHub Actions ».
+name: Planche
+
+on:
+  push:
+    branches: [main]
+    paths: [report/**, .github/workflows/pages.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Page d'accueil = planche
+        run: |
+          test -f report/compare.html
+          cp report/compare.html report/index.html
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: report
+      - id: deployment
+        uses: actions/deploy-pages@v4

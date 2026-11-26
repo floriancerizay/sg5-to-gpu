@@ -1,0 +1,6 @@
+# À installer dans le .venv de la racine du dépôt (cf. README, section « Installer »)
+lxml>=5
+numpy>=1.26
+Pillow>=10
+scipy>=1.11
+fonttools>=4.40  # marques de police converties en tracés SVG (pattern_tiles)
