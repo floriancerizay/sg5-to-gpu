@@ -21,6 +21,7 @@ Usage : bin/compare.py [--sections plu_prescription,...] [--skip-qgis]
 
 import argparse
 import csv
+import functools
 import html
 import re
 import shutil
@@ -30,7 +31,7 @@ from pathlib import Path
 from string import Template
 
 import numpy as np
-from PIL import Image, ImageChops, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 from scipy import ndimage
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -56,7 +57,6 @@ from config import (
     read_json,
     write_json,
 )
-from qml2sld import ogc_conditions
 
 SCORES = SYMBOLS_DIR / "scores.json"
 ISSUES = SYMBOLS_DIR / "issues.json"
@@ -85,11 +85,10 @@ FIELDS = [
 ]
 VARIANTS = ("qgis", "script", "prod")  # rendus calculés
 MAIN_VARIANTS = ("qgis", "script")  # colonnes avant les problèmes ; « prod actuelle » tout à droite
-VARIANT_TITLES = {"qgis": "QGIS (QML CNIG)", "prod": "prod actuelle", "script": "Script"}
-# écart au rendu QGIS au-delà duquel le symbole est signalé ; en dessous (5 à 6,5 mesurés), simple déphasage des
-# trames (même dessin, motif décalé)
-DEVIATION = 8.0
+# écart au rendu QGIS au-delà duquel le symbole est signalé (le déphasage des trames est neutralisé par distance)
+DEVIATION = 6.0
 MAX_SHIFT = 16  # px : décalage de phase des trames toléré par la métrique
+OUTLINE_BAND = 6  # px : bande autour du contour d'un polygone, comparée sans décalage
 PEAKS = 6  # maxima de corrélation essayés
 QML = {
     ("plu", "info_lin"): ["PLU/QGIS/QML/INFO_LIN.qml"],
@@ -107,7 +106,17 @@ QML = {
     ("psmv", "prescription_surf"): ["PSMV/QGIS/QML/psmv_psc_s.qml"],
     ("psmv", "zone_urba"): ["PSMV/QGIS/QML/psmv_zone_urba.qml"],
     ("sup", "symbole"): ["SUP/QGIS/QML/sup_ass.qml"],
-    ("sup", "assiette"): ["SUP/QGIS/QML/ASSIETTE_SUP_S.qml"],
+}
+# Titres des sections de la planche
+SECTION_TITLES = {
+    "plu_prescription": "PLU · prescriptions",
+    "plu_info": "PLU · informations",
+    "plu_zone_urba": "PLU · zonage",
+    "plu_secteur_cc": "PLU · secteurs de carte communale",
+    "psmv_prescription": "PSMV · prescriptions",
+    "psmv_info": "PSMV · informations",
+    "psmv_zone_urba": "PSMV · zonage",
+    "sup": "SUP",
 }
 GEOM_LETTER = {"S": "surf.", "L": "lin.", "P": "pct."}
 # Géométries des vignettes du catalogue CNIG (tracés vectoriels des PDF, repère du cadre ramené à [-1, 1],
@@ -240,7 +249,7 @@ def build_sections():
         }
         if e["domain"] == "sup":
             row["idass"] = f"{e['attrs']['suptype']}-test"
-            add("sup_symbole", "sup_symbole", None, row, False)
+            add("sup", "sup_symbole", None, row, False)
         elif e["layer"].startswith(("prescription", "info")):
             fam = e["layer"].split("_")[0]
             a = e["attrs"]
@@ -248,22 +257,6 @@ def build_sections():
             add(f"{e['domain']}_{fam}", f"{e['domain']}_{e['layer']}", key, row, True)
         else:
             add(f"{e['domain']}_{e['layer']}", f"{e['domain']}_{e['layer']}", None, row, False)
-    for r in read_json(SCRIPT_DIR / "sup_rules.json", []):
-        add(
-            "sup_assiette",
-            "sup_assiette",
-            None,
-            {
-                "code": r["label"],
-                "label": r["label"],
-                "classement": "règle",
-                "suptype": r["suptype"] or "",
-                "domain": "sup",
-                "idass": f"{(r['suptype'] or '').upper()}-test",
-                **r["attrs"],
-            },
-            False,
-        )
 
     for sec in sections.values():
         keys = sorted(sec["groups"])
@@ -331,11 +324,9 @@ def geoserver_href(href, sub="", src=None):
 def prod_style(name):
     """SLD de production d'une couche de la planche, pictogrammes servis depuis GEOSERVER_CMP_IMG/prod ; ou None."""
     domain, _, layer = name.partition("_")
-    if domain == "sup":
-        path = STYLES_DIR / "SLDS/sup/sup/assiette_sup_s.sld" if layer == "assiette" else None
-    else:
-        path = STYLES_DIR / "data/du" / f"{layer}.sld"
-    if not path or not path.is_file():
+    # SUP : style des assiettes surfaciques, appliqué à l'attribut suptype de la grille de test
+    path = STYLES_DIR / ("SLDS/sup/sup/assiette_sup_s.sld" if domain == "sup" else f"data/du/{layer}.sld")
+    if not path.is_file():
         return None
     text = path.read_text(encoding="utf-8")
     # pictogrammes de production dans un sous-dossier : 24 portent le nom d'un SVG CNIG au dessin différent
@@ -347,20 +338,14 @@ def prod_style(name):
 
 
 def script_style(name, rows):
-    """SLD « symbole = code » d'une couche, depuis data/symbols/script ; assiettes SUP : règles d'ASSIETTE_SUP_S."""
-    rules = []
-    if name == "sup_assiette":
-        rules = [
-            sld.rule_xml(r["label"], r["label"], ogc_conditions(r["suptype"], r["attrs"]), _symbolizers(r))
-            for r in read_json(SCRIPT_DIR / "sup_rules.json")
-        ]
-    else:
-        domain = name.split("_")[0]
-        index = read_json(SCRIPT_DIR / "index.json")
-        for row in rows:
-            entry = index.get(f"{domain}:{row['code']}")
-            if entry:
-                rules.append(sld.rule_xml(row["code"], row["label"], [("symbole", row["code"])], _symbolizers(entry)))
+    """SLD « symbole = code » d'une couche, depuis data/symbols/script."""
+    domain = name.split("_")[0]
+    index = read_json(SCRIPT_DIR / "index.json")
+    rules = [
+        sld.rule_xml(row["code"], row["label"], [("symbole", row["code"])], _symbolizers(index[key]))
+        for row in rows
+        if (key := f"{domain}:{row['code']}") in index
+    ]
     return sld.sld_document(f"script_{name}", rules) if rules else None
 
 
@@ -436,15 +421,12 @@ def _rgb(path):
     return np.asarray(Image.open(path).convert("RGB").filter(ImageFilter.GaussianBlur(2)), dtype=float)
 
 
-def distance(img, ref):
-    """Écart moyen (0-255, RVB) entre deux tuiles, après recalage de la phase des trames.
-
-    QGIS cale les motifs de remplissage sur l'emprise de l'objet, GeoServer sur l'origine de l'image :
-    on essaie les décalages (≤ MAX_SHIFT px) des principaux maxima de corrélation croisée et on garde
-    l'écart minimal (sans décalage compris).
-    """
-    plain = float(np.abs(img - ref).mean())
+def _shift_candidates(img, ref, plain, mask=None):
+    """Décalages (dy, dx) à essayer pour recaler la phase des trames : principaux maxima de la corrélation
+    croisée (≤ MAX_SHIFT px), complétés d'une grille grossière si l'écart sans décalage est notable."""
     g, r = img.mean(axis=2), ref.mean(axis=2)
+    if mask is not None:
+        g, r = g * mask, r * mask
     g, r = g - g.mean(), r - r.mean()
     xc = np.fft.fftshift(np.fft.irfft2(np.fft.rfft2(r) * np.conj(np.fft.rfft2(g)), s=r.shape))
     h, w = r.shape
@@ -452,18 +434,55 @@ def distance(img, ref):
     win = xc[h // 2 - c : h // 2 + c + 1, w // 2 - c : w // 2 + c + 1]
     # maxima locaux de la corrélation : le plus fort est souvent le contour, pas la trame
     peaks = (win == ndimage.maximum_filter(win, size=5)) & (win > 0)
-    cands = [
-        (int(py) - c, int(px) - c)
-        for py, px in sorted(zip(*np.nonzero(peaks), strict=True), key=lambda p: -win[p])[:PEAKS]
-    ]
-    if plain > 3:  # écart notable : on complète par une grille grossière de décalages
-        cands += [(dy, dx) for dy in range(-8, 9, 2) for dx in range(-8, 9, 2)]
-    best = plain
-    for dy, dx in cands:
-        if (dy, dx) != (0, 0):
+    ranked = sorted(zip(*np.nonzero(peaks), strict=True), key=lambda p: -win[p])[:PEAKS]
+    candidates = [(int(py) - c, int(px) - c) for py, px in ranked]
+    if plain > 3:
+        candidates += [(dy, dx) for dy in range(-8, 9, 2) for dx in range(-8, 9, 2)]
+    return [shift for shift in candidates if shift != (0, 0)]
+
+
+def distance(img, ref, masks=None):
+    """Écart moyen (0-255, RVB) entre deux tuiles, après recalage de la phase des trames.
+
+    QGIS cale les motifs de remplissage sur l'emprise de l'objet, GeoServer sur l'origine de l'image : on essaie
+    les décalages de _shift_candidates et on garde l'écart minimal (sans décalage compris).
+    masks : (intérieur, bande du contour) du polygone de test. L'intérieur est alors recalé ; l'extérieur, calé sur
+    la géométrie dans les deux rendus, est comparé sans décalage ; dans la bande, où se touchent contour et trame,
+    chaque pixel garde le meilleur des deux. Sans masque (lignes, points), toute la tuile est recalée.
+    """
+    error = np.abs(img - ref).mean(axis=2)
+    plain = float(error.mean())
+    c = MAX_SHIFT
+    if masks is None:
+        best = plain
+        for dy, dx in _shift_candidates(img, ref, plain):
             shifted = np.roll(img, (dy, dx), axis=(0, 1))
             best = min(best, float(np.abs(shifted - ref)[c:-c, c:-c].mean()))  # bords enroulés exclus
-    return best
+        return best
+    interior, band = masks
+    outside = float(error[~(interior | band)].sum())
+    best = float(error[interior | band].sum())
+    for dy, dx in _shift_candidates(img, ref, plain, interior):
+        shifted_error = np.abs(np.roll(img, (dy, dx), axis=(0, 1)) - ref).mean(axis=2)
+        total = shifted_error[interior].sum() + np.minimum(error, shifted_error)[band].sum()
+        best = min(best, float(total))
+    return (outside + best) / error.size
+
+
+@functools.cache
+def polygon_masks(name):
+    """(intérieur, bande du contour) du polygone de test des cellules d'une couche surfacique (le même dans chaque
+    cellule) : la bande fait OUTLINE_BAND px de part et d'autre du contour. None pour des lignes ou des points."""
+    if geom_of(name) != "S":
+        return None
+    template = f"{shape_of(name)}_S" if f"{shape_of(name)}_S" in TEMPLATES else "sheet_S"
+    pad = (STEP - CELL) / 2
+    points = [((pad + CELL / 2 * (1 + u)) / RES, (pad + CELL / 2 * (1 - v)) / RES) for u, v in TEMPLATES[template]]
+    inside, outline = Image.new("1", (TILE, TILE), 0), Image.new("1", (TILE, TILE), 0)
+    ImageDraw.Draw(inside).polygon(points, fill=1)
+    ImageDraw.Draw(outline).line([*points, points[0]], fill=1, width=2 * OUTLINE_BAND + 1, joint="curve")
+    band = np.asarray(outline, dtype=bool)
+    return np.asarray(inside, dtype=bool) & ~band, band
 
 
 def compute_scores(layers, img_dir):
@@ -472,7 +491,7 @@ def compute_scores(layers, img_dir):
     scores = {}
     for name, rows in layers.items():
         paths = {v: img_dir / f"{v}_{name}.png" for v in ("qgis", "script")}
-        if not all(p.is_file() for p in paths.values()) or name == "sup_assiette":
+        if not all(p.is_file() for p in paths.values()):
             continue
         qgis, script = _rgb(paths["qgis"]), _rgb(paths["script"])
         for r in rows:
@@ -480,7 +499,7 @@ def compute_scores(layers, img_dir):
             col, row = r["cell"] % COLS, r["cell"] // COLS
             sl = (slice(row * TILE, (row + 1) * TILE), slice(col * TILE, (col + 1) * TILE))
             if key in idx and not idx[key]["source"].startswith("=") and qgis[sl].min() < 250:
-                scores[key] = round(distance(script[sl], qgis[sl]), 2)
+                scores[key] = round(distance(script[sl], qgis[sl], polygon_masks(name)), 2)
     write_json(SCORES, scores)
     return scores
 
@@ -490,15 +509,101 @@ def compute_scores(layers, img_dir):
 PAGE = Template((Path(__file__).parent / "compare.html").read_text(encoding="utf-8"))  # gabarit de la planche
 
 
-def tile(img, i):
+def tile(img, i, css="render"):
     """Cellule du tableau : portion i de l'image d'une section (ou « — »)."""
     if img is None:
-        return '<td><div class="na">—</div></td>'
+        return f'<td class="{css}"><div class="na">—</div></td>'
     col, row = i % COLS, i // COLS
     return (
-        f'<td><div class="t" style="background-image:url(img/{img});'
+        f'<td class="{css}"><div class="t" style="background-image:url(img/{img});'
         f'background-position:-{col * TILE}px -{row * TILE}px"></div></td>'
     )
+
+
+# Types de problème proposés par le filtre de la planche : (clé, libellé, motif reconnu dans le message).
+# Un message prend le premier type dont le motif apparaît ; l'ordre compte (« aucun style » avant « absent »).
+PROBLEM_TYPES = [
+    ("no-style", "aucun style", "aucun style"),
+    ("absent", "code absent des QML, style d'un autre code", "absent des QML"),
+    ("label", "étiquettes (.lyrx, polices, halo)", "étiquette"),
+    ("conversion", "conversion incomplète", ("non traduit", "presque jointif", "pictogramme")),
+    ("font-mark", "marque de police", "marque de police"),
+    ("deviation", "écart au rendu QGIS", "écart au rendu QGIS"),
+    ("no-plate", "sans vignette du catalogue", "pas de vignette"),
+]
+
+
+# Recommandation affichée sous chaque problème : (motif reconnu dans le message, recommandation).
+# Le premier motif présent dans le message l'emporte : les plus précis d'abord.
+RECOMMENDATIONS = [
+    (
+        "aucun style",
+        "Ajouter une catégorie pour ce code dans le QML de sa couche, ou retirer le code s'il n'est plus utilisé.",
+    ),
+    (
+        "diffère de celui de",
+        "Ajouter une catégorie pour ce code dans le QML, après avoir vérifié lequel est juste : "
+        "le symbole du code principal ou le SLD par code du sous-code.",
+    ),
+    (
+        "style du code principal",
+        "Ajouter une catégorie pour ce code dans le QML, avec son propre symbole ou celui du code principal.",
+    ),
+    ("fichier SLD identique", "Ajouter une catégorie pour ce code dans le QML, avec le même symbole que son jumeau."),
+    ("étiquette reprise", "Définir l'étiquette dans le QML de zonage (champ typezone, halo de la couleur de la zone)."),
+    (
+        "texte constant",
+        "Décision CNIG : afficher la hauteur de chaque prescription (quel attribut ?), une valeur d'exemple, ou rien.",
+    ),
+    ("police d'étiquette", "Déposer le fichier de la police dans __Ressources du dépôt CNIG."),
+    ("halo", "Corriger le halo dans le .lyrx : couleur de la zone, comme le demande la spécification."),
+    (
+        "presque jointif",
+        "Réduire le picto ou augmenter le pas de la trame dans le QML, pour que les pictos ne se chevauchent pas.",
+    ),
+    ("non embarqué", "Embarquer le SVG dans le QML, ou le déposer dans le dépôt CNIG."),
+    ("non tradui", "Remplacer cet élément QGIS par un équivalent pris en charge par la conversion (docs/chaine.md)."),
+    ("manquant", "Déposer le pictogramme dans le dépôt CNIG."),
+    ("absent des SVG CNIG", "Déposer ce pictogramme en SVG dans le dépôt CNIG, avec les autres."),
+    (
+        "marque de police",
+        "Déposer la police dans __Ressources du dépôt CNIG, ou remplacer la marque par un pictogramme SVG.",
+    ),
+    (
+        "écart au rendu QGIS",
+        "Comparer les colonnes QGIS et script : un dessin différent vient de la conversion (sg5-to-gpu), "
+        "pas du symbole CNIG.",
+    ),
+    (
+        "pas de vignette",
+        "Ajouter une fiche pour ce code dans le catalogue, ou l'inclure dans la plage d'une fiche existante.",
+    ),
+]
+
+
+def recommendation(message):
+    """Recommandation pour un message de problème, ou None."""
+    return next((text for pattern, text in RECOMMENDATIONS if pattern in message), None)
+
+
+def problem_type(message):
+    """Clé du type de problème d'un message (« other » si aucun ne correspond)."""
+    for key, _, patterns in PROBLEM_TYPES:
+        if any(p in message for p in ((patterns,) if isinstance(patterns, str) else patterns)):
+            return key
+    return "other"
+
+
+def filter_options(counts, total):
+    """Options du filtre de la planche, avec le nombre de fiches de chaque type."""
+    options = [
+        ("all", f"toutes les fiches ({total})"),
+        ("any", f"avec un problème ou une remarque ({counts.get('any', 0)})"),
+    ]
+    options += [(key, f"{label} ({counts[key]})") for key, label, _ in PROBLEM_TYPES if counts.get(key)]
+    if counts.get("other"):
+        options.append(("other", f"autres ({counts['other']})"))
+    return "".join(f'<option value="{key}">{html.escape(label)}</option>' for key, label in options)
 
 
 def problems(key, scores, issues):
@@ -510,15 +615,25 @@ def problems(key, scores, issues):
     return out
 
 
-def _problem_html(items):
-    return "".join(f'<div class="{"w" if p.startswith("⚠") else "i"}">{html.escape(p)}</div>' for p in items)
+def _problem_html(items, geometry=""):
+    """Éléments de liste des remarques : pastille « ⚠ » / « ℹ », préfixe de géométrie, texte, recommandation."""
+    out = []
+    for item in items:
+        icon, _, text = item.partition(" ")
+        css = "w" if icon == "⚠" else "i"
+        advice = recommendation(item)
+        advice = f'<div class="reco">{html.escape(advice)}</div>' if advice else ""
+        out.append(
+            f'<li class="{css}"><span class="ico">{icon}</span><div>{geometry}{html.escape(text)}{advice}</div></li>'
+        )
+    return "".join(out)
 
 
 def plate(name):
     """Cellule du tableau : vignette du catalogue CNIG (ou « — »)."""
     if not name:
-        return '<td><div class="na">—</div></td>'
-    return f'<td><img class="cnig" src="cnig/{html.escape(name)}" alt=""></td>'
+        return '<td class="render"><div class="na">—</div></td>'
+    return f'<td class="render"><div class="plate"><img src="cnig/{html.escape(name)}" alt=""></div></td>'
 
 
 def sheet_row(name, sec, group, images, plates, scores, issues):
@@ -526,14 +641,11 @@ def sheet_row(name, sec, group, images, plates, scores, issues):
     entries = [(layer, group["codes"][layer]) for layer in sec["layers"] if layer in group["codes"]]
     first = entries[0][1]
 
-    def geometry(layer, bold=False):
-        """Préfixe « surf. », « lin. », « pct. » des fiches à plusieurs géométries."""
-        if not sec["sheet"]:
-            return ""
-        letter = GEOM_LETTER[geom_of(layer)]
-        return f"<b>{letter}</b> " if bold else f"{letter} "
+    def geometry(layer):
+        """Étiquette « surf. », « lin. », « pct. » des fiches à plusieurs géométries."""
+        return f'<span class="geom">{GEOM_LETTER[geom_of(layer)]}</span>' if sec["sheet"] else ""
 
-    codes = "<br>".join(f"{geometry(layer)}<code>{html.escape(row['code'])}</code>" for layer, row in entries)
+    codes = "".join(f"<div>{geometry(layer)}<code>{html.escape(row['code'])}</code></div>" for layer, row in entries)
     keys = [f"{row['domain']}:{row['code']}" for _, row in entries]
     vignette = next((plates[key] for key in keys if key in plates), None)
 
@@ -541,38 +653,38 @@ def sheet_row(name, sec, group, images, plates, scores, issues):
     for (layer, _), key in zip(entries, keys, strict=True):
         items = problems(key, scores, issues)
         if items:
-            detail.append(geometry(layer, bold=True) + _problem_html(items))
+            detail.append(_problem_html(items, geometry(layer)))
             found += items
-    if vignette is None and name != "sup_assiette":
+    if vignette is None:
         missing = "ℹ pas de vignette dans le catalogue CNIG"
         detail.append(_problem_html([missing]))
         found.append(missing)
 
+    notes = f"<ul>{''.join(detail)}</ul>" if detail else '<span class="ok">aucune</span>'
     cells = [
-        f"<td>{codes}<div class=cls>{html.escape(first['classement'])}</div></td>",
-        f"<td class=lab>{html.escape(first['label'])}</td>",
+        f'<td class="codes">{codes}<span class="cls">{html.escape(first["classement"])}</span></td>',
+        f'<td class="lab">{html.escape(first["label"])}</td>',
         plate(vignette),
         *(tile(images.get((name, v)), group["cell"]) for v in MAIN_VARIANTS),
-        f"<td class=pb>{''.join(detail) or '<span class=ok>—</span>'}</td>",
-        tile(images.get((name, "prod")), group["cell"]),
+        f'<td class="pb">{notes}</td>',
+        tile(images.get((name, "prod")), group["cell"], "render prod"),
     ]
-    return ('<tr class="has-note">' if found else "<tr>") + "".join(cells) + "</tr>", found
+    types = sorted({problem_type(message) for message in found})
+    opening = f'<tr data-types="{" ".join(types)}">' if types else "<tr>"
+    return opening + "".join(cells) + "</tr>", found
 
 
 def write_html(sections, images, scores, sha):
     """Planche report/compare.html : un seul tableau, une section par couche, une ligne par fiche.
-    → nombre de fiches {"all", "warn" (avec « ⚠ »), "note" (avec « ⚠ » ou « ℹ »)}."""
+    → nombre de fiches {"all", "warn" (avec « ⚠ »), "note" (avec « ⚠ » ou « ℹ »)}.
+
+    Le filtre de la page propose chaque type de problème présent, avec son nombre de fiches."""
     plates = read_json(REPORT_DIR / "cnig/plates.json", {})
     issues = read_json(ISSUES, {})
-    head = (
-        "<tr><th>code</th><th>libellé</th><th>attendu (catalogue CNIG)</th>"
-        + "".join(f"<th>{VARIANT_TITLES[v]}</th>" for v in MAIN_VARIANTS)
-        + "<th>problèmes du symbole d'origine</th>"
-        + f"<th>{VARIANT_TITLES['prod']}</th></tr>"
-    )
     ncols = 4 + len(VARIANTS)
     html_sections, nav = [], []
     totals = {"all": 0, "warn": 0, "note": 0}
+    type_counts = {}  # type de problème (et « any ») → nombre de fiches
     for name, sec in sections.items():
         rows, n_warn, n_note = [], 0, 0
         for group in sec["groups"]:
@@ -580,14 +692,21 @@ def write_html(sections, images, scores, sha):
             rows.append(row)
             n_warn += any(p.startswith("⚠") for p in found)
             n_note += bool(found)
+            for key in {problem_type(message) for message in found} | ({"any"} if found else set()):
+                type_counts[key] = type_counts.get(key, 0) + 1
         n = len(sec["groups"])
         totals["all"] += n
         totals["warn"] += n_warn
         totals["note"] += n_note
-        nav.append(f'<a href="#{name}">{name}</a>')
-        title = f'{name} <span class="n">{n} fiches · {n_warn} avec « ⚠ » · {n_note} avec remarque</span>'
+        label = SECTION_TITLES.get(name, name)
+        nav.append(f'<a href="#{name}" data-section="{name}">{label}</a>')
+        title = (
+            f"<h2>{label}</h2><span class=stat>{n} fiches</span>"
+            f'<span class="stat{" w" if n_warn else ""}">{n_warn} avec ⚠</span>'
+            f'<span class="stat">{n_note} avec remarque</span>'
+        )
         html_sections.append(
-            f'<tbody data-note="{n_note}"><tr class="sec" id="{name}"><td colspan="{ncols}">{title}</td></tr>'
+            f'<tbody data-section="{name}"><tr class="sec" id="{name}"><td colspan="{ncols}">{title}</td></tr>'
             + "".join(rows)
             + "</tbody>"
         )
@@ -597,11 +716,8 @@ def write_html(sections, images, scores, sha):
             sha=sha,
             scale=int(RES / 0.00028),
             nav=" ".join(nav),
-            deviation=f"{DEVIATION:g}",
-            n_all=totals["all"],
-            n_warn=totals["warn"],
-            n_note=totals["note"],
-            sections="<table><thead>" + head + "</thead>" + "\n".join(html_sections) + "</table>",
+            filters=filter_options(type_counts, totals["all"]),
+            sections="\n".join(html_sections),
         ),
         encoding="utf-8",
     )
@@ -610,7 +726,7 @@ def write_html(sections, images, scores, sha):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--sections", help="sous-ensemble de sections (ex. plu_prescription,sup_assiette)")
+    ap.add_argument("--sections", help="sous-ensemble de sections (ex. plu_prescription,sup)")
     ap.add_argument("--skip-qgis", action="store_true")
     args = ap.parse_args()
 

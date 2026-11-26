@@ -190,11 +190,7 @@ def resolve_font(family):
         for f in files:
             shutil.copyfile(f, FONTS_DIR / f.name)
         if substitute:
-            return candidate, (
-                f"⚠ police d'étiquette {family} absente (STYLES/data/fonts de gpu-entrepot, système) : "
-                f"remplacée par {candidate} ; déposer le fichier de police dans STYLES/data/fonts de "
-                f"gpu-entrepot pour l'utiliser"
-            )
+            return candidate, f"⚠ police d'étiquette {family} absente de __Ressources"
         return candidate, None
     return family, f"⚠ police d'étiquette {family} absente : GeoServer utilisera une police de substitution"
 
@@ -417,18 +413,18 @@ def origin_issues(e, entry):
     ref = source[2:]
     if entry is None and e.get("sld"):
         out.append(
-            f"⚠ absent des QML CNIG (symbole par défaut sous QGIS), sans code QML équivalent ni code "
-            f"principal : aucun style produit (son fichier {e['sld']} n'est pas utilisé)"
+            f"⚠ absent des QML CNIG, sans code QML équivalent ni code principal : aucun style produit "
+            f"(son fichier {e['sld']} n'est pas utilisé)"
         )
     elif entry is None:
         out.append("⚠ aucun style CNIG (ni QML, ni fichier SLD par code)")
     elif source.startswith("= ") and entry.get("main_code"):
-        own = f" ; son fichier {e['sld']} diffère de celui de {ref}" if e.get("sld") else ""
-        out.append(f"⚠ absent des QML CNIG (symbole par défaut sous QGIS){own} : style du code principal {ref}")
+        if e.get("sld"):
+            out.append(f"⚠ absent des QML CNIG ; pourtant, le SLD de {Path(e['sld']).name} diffère de celui de {ref}")
+        else:
+            out.append(f"⚠ absent des QML CNIG : style du code principal {ref}")
     elif source.startswith("= "):
-        out.append(f"ℹ absent des QML CNIG (symbole par défaut sous QGIS) : style de {ref} (fichier SLD identique)")
-    if not e.get("sld") and e["domain"] != "sup":
-        out.append("ℹ pas de fichier SLD CNIG pour ce code (QML seul)")
+        out.append(f"ℹ absent des QML CNIG : style de {ref} (fichier SLD identique)")
     return out
 
 

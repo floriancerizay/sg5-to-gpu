@@ -30,7 +30,7 @@ Usage : $0 [options] [-- options de bin/compare.py]
 
   --from ÉTAPE     reprendre à une étape : index | plates | convert | slds | compare
   --validate       étape slds : publication d'essai des SLD assemblés sur le GeoServer local
-  --sections S     sous-ensemble de sections de la planche (ex. plu_prescription,sup_assiette)
+  --sections S     sous-ensemble de sections de la planche (ex. plu_prescription,sup)
   --skip-qgis      sans rendu QGIS (essai rapide : pas de mesure, scores.json réécrit)
   -h, --help       cette aide
 

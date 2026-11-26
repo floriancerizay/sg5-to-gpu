@@ -15,10 +15,10 @@ motif centré, rotation, opacité et couleurs intégrées ; les trames consécut
 fusionnées dans une seule tuile ; une tuile trop petite est répétée k × k fois.
 Les hachures deviennent une tuile périodique d/|sin θ| × d/|cos θ| traversée par les traits ; les
 hachures consécutives de même angle et même pas sont fusionnées (écart entre traits conservé).
-Hachure tiretée : horizontale / verticale, tuile d × période du tiret ; oblique hors 45°, les tirets de tous
-les traits partent d'une même perpendiculaire (comme QGIS) et la tuile est répétée k fois avec k·w·|cos θ|
-et k·h·sin θ multiples de la période du tiret (ajustée à l'échelle près). À 45°, shape://slash|backslash
-natif (correct).
+Hachure tiretée : horizontale / verticale, tuile d × période du tiret ; oblique, les tirets de tous les traits
+partent d'une même perpendiculaire (comme QGIS) et la tuile est répétée k fois avec k·w·|cos θ| et k·h·sin θ
+multiples de la période du tiret (ajustée à l'échelle près). À 45°, shape://slash|backslash natif (correct) tant
+que le tiret tient dans la marque ; trame plus dense (EL7) : tuile.
 
 Pictogrammes le long d'une ligne (GraphicStroke, stroke_graphics) : rotation intégrée au SVG (rot_<hash>.svg),
 décalage reporté en stroke-dashoffset / PerpendicularOffset.
@@ -310,8 +310,11 @@ def hatch_motif(sym):
     dash = [_f(v) for v in stroke.get("stroke-dasharray", "").replace(",", " ").split()]
     axis = rot % 90 < 0.01 or rot % 90 > 89.99
     if dash:
-        # tiret le long d'un trait à 45° : GeoServer le rend correctement en natif
-        if (not axis and abs(rot % 90 - 45) < 0.01) or min(dash) < 0 or sum(dash) <= 0:
+        # Trait tireté à 45° : GeoServer le rend correctement en natif si le tiret tient dans la marque ; dans une
+        # trame dense (marque plus petite que la période du tiret, EL7), le tiret recommence dans chaque marque et
+        # la hachure devient une grille de petits traits : tuile synthétisée.
+        diagonal = not axis and abs(rot % 90 - 45) < 0.01
+        if (diagonal and _child_float(g, "Size") >= sum(dash)) or min(dash) < 0 or sum(dash) <= 0:
             return None
         dash = dash * 2 if len(dash) % 2 else dash
     d = _child_float(g, "Size") * kind[1]

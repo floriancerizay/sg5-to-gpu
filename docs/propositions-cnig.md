@@ -55,6 +55,7 @@ Proposition : déposer dans `__Ressources/polices/`, hors archive, chaque police
 - Même découpage et même nommage pour PLU, PSMV et SUP ;
 - champ `symbole` du standard (et non `SYMBOLE`) ;
 - règles SUP filtrées sur `suptype` plutôt que par une expression sur `idass` ;
+- SUP : un seul QML. Aujourd’hui, `sup_ass.qml` (par code) et `ASSIETTE_SUP_S.qml` (par attributs) décrivent les mêmes assiettes et doivent être tenus d’accord ; si `grille_sup.csv` donnait les attributs de chaque code (`suptype`, `typeass`…), comme les grilles PLU et PSMV, le second se déduirait du premier ;
 - libellés de règle uniques ;
 - pictogrammes SVG référencés par leur fichier plutôt qu’embarqués.
 

@@ -45,13 +45,13 @@ Prérequis système :
 ```bash
 ./run.sh                                  # chaîne complète (~3 min)
 ./run.sh --from convert                   # après modification de qml2sld / pattern_tiles / convert_symbols
-./run.sh --from compare --sections plu_prescription,sup_assiette --skip-qgis   # essai rapide
+./run.sh --from compare --sections plu_prescription,sup --skip-qgis   # essai rapide
 ```
 
 | Option | Effet |
 |--------|-------|
 | `--from ÉTAPE` | Reprend à `index`, `plates`, `convert`, `slds` ou `compare` (sorties des étapes précédentes réutilisées). |
-| `--sections S` | Ne traite que ces sections (la planche ne contient alors qu’elles) : `plu_prescription`, `plu_info`, `plu_zone_urba`, `plu_secteur_cc`, `psmv_…`, `sup_symbole`, `sup_assiette`. |
+| `--sections S` | Ne traite que ces sections (la planche ne contient alors qu’elles) : `plu_prescription`, `plu_info`, `plu_zone_urba`, `plu_secteur_cc`, `psmv_…`, `sup`. |
 | `--skip-qgis` | Pas de rendu QGIS : colonne QGIS vide, pas de mesure d’écart. |
 | `--validate` | Étape `slds` : publication d’essai des SLD assemblés sur le GeoServer local, refus listés. |
 | `-- …` | Options transmises à `bin/compare.py`. |
