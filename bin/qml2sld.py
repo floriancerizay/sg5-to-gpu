@@ -27,16 +27,18 @@ décalés vers l'intérieur chez QGIS, vers l'extérieur chez GeoServer (signe i
 Sortie de Converter.symbolizers : liste d'éléments lxml, à compléter par pattern_tiles (tuiles de trame,
 pictos de ligne). Les pas des pictos de ligne (pitches) et les remarques (notes) sont renvoyés à part.
 """
+
 import base64
 import hashlib
 import math
 import re
 import urllib.parse
 from pathlib import Path
+from typing import ClassVar
 
 from lxml import etree
 
-from sld_normalize import NS_SLD, NS_XLINK
+from sld import NS_SLD, NS_XLINK
 
 DPI = 90.714  # 0,28 mm/px : résolution de rendu GeoServer (et de la référence QGIS)
 UNIT = {"Point": DPI / 72, "MM": DPI / 25.4, "Pixel": 1.0, "Inch": DPI}
@@ -45,13 +47,23 @@ MIN_STROKE = 0.7  # px : en dessous, GeoServer n'affiche quasiment plus le trait
 QT_DASHES = {"dash": (4, 2), "dot": (1, 2), "dash dot": (4, 2, 1, 2), "dash dot dot": (4, 2, 1, 2, 1, 2)}
 QT_CAPS = {"round": "round", "square": "square", "flat": "butt"}
 QT_JOINS = {"round": "round", "bevel": "bevel", "miter": "mitre"}
-MARKS = {"circle": "circle", "square": "square", "rectangle": "square", "triangle": "triangle",
-         "equilateral_triangle": "triangle", "star": "star", "cross": "cross", "cross2": "x", "line": "shape://vertline"}
+MARKS = {
+    "circle": "circle",
+    "square": "square",
+    "rectangle": "square",
+    "triangle": "triangle",
+    "equilateral_triangle": "triangle",
+    "star": "star",
+    "cross": "cross",
+    "cross2": "x",
+    "line": "shape://vertline",
+}
 QGIS_OUTLINE = "35,35,35,255"  # couleur de contour par défaut de QGIS
 JITTER = "{urn:test-symbo}jitter"  # attribut interne : décalage aléatoire des points d'une trame (pattern_tiles)
 
 
 # --- lecture du QML ------------------------------------------------------------------------------
+
 
 def px(value, unit):
     try:
@@ -121,9 +133,13 @@ def svg_aspect(path):
 
 # --- écriture SLD --------------------------------------------------------------------------------
 
+
 def _el(parent, tag, text=None, **attrs):
-    e = etree.SubElement(parent, f"{{{NS_SLD}}}{tag}", **attrs) if parent is not None \
+    e = (
+        etree.SubElement(parent, f"{{{NS_SLD}}}{tag}", **attrs)
+        if parent is not None
         else etree.Element(f"{{{NS_SLD}}}{tag}", **attrs)
+    )
     if text is not None:
         e.text = text
     return e
@@ -150,11 +166,13 @@ class Converter:
         """Écrit un SVG ; nom du SVG CNIG de même contenu (préfixé psmv_ en PSMV), sinon <stem>_<sha1>.svg."""
         sha = hashlib.sha1(data).hexdigest()
         cnig = self.svg_names.get(sha, {})
-        name = cnig.get(self.domain) or next(iter(cnig.values()), None)
-        if name:
-            name = name if self.domain != "psmv" else f"psmv_{name}"
-        else:
+        cnig_name = cnig.get(self.domain) or next(iter(cnig.values()), None)
+        if cnig_name is None:
             name = f"{stem}_{sha[:12]}.svg"
+        elif self.domain == "psmv":
+            name = f"psmv_{cnig_name}"
+        else:
+            name = cnig_name
         path = self.svg_dir / name
         if not path.exists():
             path.write_bytes(data)
@@ -220,8 +238,11 @@ class Converter:
             if oc and ow > 0:
                 params.update({"outline": oc, "outline-width": f"{ow:.3g}"})
             eg = _el(g, "ExternalGraphic")
-            _el(eg, "OnlineResource", **{f"{{{NS_XLINK}}}href": f"{fname}?{urllib.parse.urlencode(params)}",
-                                         f"{{{NS_XLINK}}}type": "simple"})
+            _el(
+                eg,
+                "OnlineResource",
+                **{f"{{{NS_XLINK}}}href": f"{fname}?{urllib.parse.urlencode(params)}", f"{{{NS_XLINK}}}type": "simple"},
+            )
             _el(eg, "Format", "image/svg+xml")
         else:
             notes.append(f"⚠ picto QML {cls} non traduit")
@@ -230,7 +251,7 @@ class Converter:
         if angle % 360:
             _el(g, "Rotation", _num(angle % 360))
         ox, oy = offset_xy(q)
-        if abs(ox) > .05 or abs(oy) > .05:
+        if abs(ox) > 0.05 or abs(oy) > 0.05:
             d = _el(g, "Displacement")
             _el(d, "DisplacementX", f"{ox:.2f}")
             _el(d, "DisplacementY", f"{oy:.2f}")  # GeoServer comme QGIS : y vers le bas (mesuré)
@@ -256,9 +277,11 @@ class Converter:
         oc, _ = qml_color(q.get("outline_color") or QGIS_OUTLINE)
         ow = px(q.get("outline_width") or 0, q.get("outline_width_unit")) or 0.0
         fc, fa = qml_color(q.get("color"))
-        style = (f'fill="{fc if fa > 0 else "none"}" fill-opacity="{fa:.2f}" stroke="{oc}" '
-                 f'stroke-width="{ow if ow > 0 else 1:.3g}"')
-        m = ow / 2 if ow > 0 else .5
+        style = (
+            f'fill="{fc if fa > 0 else "none"}" fill-opacity="{fa:.2f}" stroke="{oc}" '
+            f'stroke-width="{ow if ow > 0 else 1:.3g}"'
+        )
+        m = ow / 2 if ow > 0 else 0.5
         vb = f"{-m:.3f} {-m:.3f} {w + 2 * m:.3f} {h + 2 * m:.3f}"
         if name == "rectangle":
             shape = f'<rect x="0" y="0" width="{w:.3f}" height="{h:.3f}" {style}/>'
@@ -267,11 +290,27 @@ class Converter:
         else:
             notes.append(f"⚠ ellipse QGIS « {name} » non traduite")
             return None
-        data = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{w + 2 * m:.3f}" height="{h + 2 * m:.3f}" '
-                f'viewBox="{vb}">{shape}</svg>').encode()
+        data = (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{w + 2 * m:.3f}" height="{h + 2 * m:.3f}" '
+            f'viewBox="{vb}">{shape}</svg>'
+        ).encode()
         return self._svg_file(data, "ellipse")
 
     # couches ------------------------------------------------------------------------------------
+
+    # classe de couche QML → méthode de conversion
+    LAYER_CONVERTERS: ClassVar[dict] = {
+        "SimpleLine": "_simple_line",
+        "MarkerLine": "_marker_line",
+        "SimpleFill": "_simple_fill",
+        "PointPatternFill": "_point_pattern_fill",
+        "LinePatternFill": "_line_pattern_fill",
+        "CentroidFill": "_centroid_fill",
+        "SimpleMarker": "_point",
+        "SvgMarker": "_point",
+        "FontMarker": "_point",
+        "EllipseMarker": "_point",
+    }
 
     def symbolizers(self, symbol, notes, pitches):
         """Symboliseurs SLD d'un <symbol> QML, dans l'ordre de dessin (ordre des couches du QML)."""
@@ -281,14 +320,14 @@ class Converter:
             if not active(layer):
                 continue
             cls = layer.get("class")
-            method = getattr(self, f"_{cls}", None)
+            method = self.LAYER_CONVERTERS.get(cls)
             if method is None:
                 notes.append(f"⚠ couche QML {cls} non traduite")
                 continue
-            out += method(layer, notes, pitches, fill_sign)
+            out += getattr(self, method)(layer, notes, pitches, fill_sign)
         return out
 
-    def _SimpleLine(self, layer, notes, pitches, fill_sign):
+    def _simple_line(self, layer, notes, pitches, fill_sign):
         p = props(layer)
         if (p.get("line_style") or "solid") == "no":
             return []
@@ -307,7 +346,7 @@ class Converter:
             _css(stroke, "stroke-dasharray", dash)
             off = px(p.get("dash_pattern_offset") or 0, p.get("dash_pattern_offset_unit")) or 0.0
             period = sum(float(v) for v in dash.split())
-            if abs(off) > .05 and period > 0:
+            if abs(off) > 0.05 and period > 0:
                 _css(stroke, "stroke-dashoffset", f"{off % period:.2f}")
         self._perpendicular(sym, p, fill_sign)
         return [sym]
@@ -315,10 +354,10 @@ class Converter:
     def _perpendicular(self, sym, p, fill_sign):
         """Décalage latéral (QGIS : vers l'intérieur d'un polygone ; GeoServer : vers l'extérieur)."""
         off = (px(p.get("offset") or 0, p.get("offset_unit")) or 0.0) * fill_sign
-        if abs(off) > .05:
+        if abs(off) > 0.05:
             _el(sym, "PerpendicularOffset", f"{off:.2f}")
 
-    def _MarkerLine(self, layer, notes, pitches, fill_sign):
+    def _marker_line(self, layer, notes, pitches, fill_sign):
         p = props(layer)
         placement = p.get("placements") or p.get("placement") or "Interval"
         if placement.lower() != "interval":
@@ -336,15 +375,15 @@ class Converter:
             sym = _el(None, "LineSymbolizer")
             stroke = _el(sym, "Stroke")
             _el(stroke, "GraphicStroke").append(g)
-            _css(stroke, "stroke-dasharray", f"{w:.2f} {max(.5, interval - w):.2f}")
-            if abs(along) > .05:
+            _css(stroke, "stroke-dasharray", f"{w:.2f} {max(0.5, interval - w):.2f}")
+            if abs(along) > 0.05:
                 _css(stroke, "stroke-dashoffset", f"{-along:.2f}")  # ramené dans [0, période) par pattern_tiles
             self._perpendicular(sym, p, fill_sign)
             pitches[stroke] = interval  # pas exact, appliqué après intégration de la rotation
             out.append(sym)
         return out
 
-    def _SimpleFill(self, layer, notes, pitches, fill_sign):
+    def _simple_fill(self, layer, notes, pitches, fill_sign):
         p = props(layer)
         style, ostyle = p.get("style") or "solid", p.get("outline_style") or "solid"
         color, alpha = qml_color(p.get("color"))
@@ -370,7 +409,7 @@ class Converter:
                 _css(stroke, "stroke-dasharray", " ".join(f"{v * max(ow, 1):g}" for v in dash))
         return [sym] if len(sym) else []
 
-    def _PointPatternFill(self, layer, notes, pitches, fill_sign):
+    def _point_pattern_fill(self, layer, notes, pitches, fill_sign):
         p = props(layer)
         dx = px(p.get("distance_x") or 15, p.get("distance_x_unit")) or 1.0
         dy = px(p.get("distance_y") or 15, p.get("distance_y_unit")) or 1.0
@@ -383,13 +422,15 @@ class Converter:
                 continue
             h = float(g.find(f"{{{NS_SLD}}}Size").text)
             # picto-texture qui déborde légèrement du pas : recouvrements / bandes, aussi sous QGIS (INF-S_09)
-            if any(b and .02 < (a - b) / b < .25 for a, b in ((w, dx), (h, dy))):
-                notes.append(f"⚠ motif presque jointif : picto {w / UNIT['Point']:.1f} × {h / UNIT['Point']:.1f} pt pour "
-                             f"un pas de {dx / UNIT['Point']:.1f} × {dy / UNIT['Point']:.1f} pt (bandes ou "
-                             f"recouvrements, aussi sous QGIS)")
+            if any(b and 0.02 < (a - b) / b < 0.25 for a, b in ((w, dx), (h, dy))):
+                notes.append(
+                    f"⚠ motif presque jointif : picto {w / UNIT['Point']:.1f} × {h / UNIT['Point']:.1f} pt pour "
+                    f"un pas de {dx / UNIT['Point']:.1f} × {dy / UNIT['Point']:.1f} pt (bandes ou "
+                    f"recouvrements, aussi sous QGIS)"
+                )
             # origine de la trame par rapport au centrage par défaut (50 % du pas), y vers le bas
             sx, sy = _pattern_offset(p, "x", dx), _pattern_offset(p, "y", dy)
-            if abs(sx) > .05 or abs(sy) > .05:
+            if abs(sx) > 0.05 or abs(sy) > 0.05:
                 d = g.find(f"{{{NS_SLD}}}Displacement")
                 if d is None:
                     d = _el(g, "Displacement")
@@ -405,12 +446,12 @@ class Converter:
             # décalage aléatoire de chaque point (QGIS random_deviation, en % du pas ou en unités) : INF-S_36
             jx = _deviation(p, "x", dx)
             jy = _deviation(p, "y", dy)
-            if jx > .05 or jy > .05:
+            if jx > 0.05 or jy > 0.05:
                 sym.set(JITTER, f"{jx:.3f} {jy:.3f} {p.get('seed') or 0}")
             out.append(sym)
         return out
 
-    def _LinePatternFill(self, layer, notes, pitches, fill_sign):
+    def _line_pattern_fill(self, layer, notes, pitches, fill_sign):
         g = hatch_graphic(layer)
         if g is None:
             notes.append("⚠ hachure QGIS (LinePatternFill) non traduite")
@@ -419,7 +460,7 @@ class Converter:
         _el(_el(sym, "Fill"), "GraphicFill").append(g)
         return [sym]
 
-    def _CentroidFill(self, layer, notes, pitches, fill_sign):
+    def _centroid_fill(self, layer, notes, pitches, fill_sign):
         out = []
         for sub in layer.findall("symbol/layer"):
             if active(sub):
@@ -437,8 +478,6 @@ class Converter:
         sym = _el(None, "PointSymbolizer")
         sym.append(g)
         return [sym]
-
-    _SimpleMarker = _SvgMarker = _FontMarker = _EllipseMarker = _point
 
 
 def _deviation(p, axis, dist):
@@ -496,7 +535,7 @@ def hatch_graphic(lpf):
     _el(g, "Size", f"{size:.2f}")
     if rot is not None:
         _el(g, "Rotation", f"{rot:g}")
-    if abs(disp[0]) > .05 or abs(disp[1]) > .05:
+    if abs(disp[0]) > 0.05 or abs(disp[1]) > 0.05:
         d = _el(g, "Displacement")
         _el(d, "DisplacementX", f"{disp[0]:.2f}")
         _el(d, "DisplacementY", f"{-disp[1]:.2f}")  # disp calculé y vers le haut ; GeoServer : y vers le bas
@@ -505,6 +544,7 @@ def hatch_graphic(lpf):
 
 # --- règles d'un QML -----------------------------------------------------------------------------
 
+
 def rule_filter(expression):
     """Filtre QGIS des règles d'ASSIETTE_SUP_S → (suptype, {attribut: valeur}) ou None si non reconnu.
     « lower(string_to_array(idass,'-')[0]) = 'a1' [AND typeass = '…' | IN (…)] »."""
@@ -512,10 +552,8 @@ def rule_filter(expression):
     m = re.search(r"string_to_array\(\s*idass\s*,\s*'-'\s*\)\[0\]\)\s*=\s*'([^']+)'", expr)
     if not m:
         return None
-    attrs = {}
-    for name, value in re.findall(r"(\w+)\s*=\s*'([^']*)'", expr[m.end():]):
-        attrs[name] = value
-    for name, values in re.findall(r"(\w+)\s+IN\s*\(([^)]*)\)", expr[m.end():]):
+    attrs = dict(re.findall(r"(\w+)\s*=\s*'([^']*)'", expr[m.end() :]))
+    for name, values in re.findall(r"(\w+)\s+IN\s*\(([^)]*)\)", expr[m.end() :]):
         attrs[name] = re.findall(r"'([^']*)'", values)
     return m.group(1).lower(), attrs
 

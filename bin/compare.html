@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><title>Comparaison symboles CNIG</title>
+<style>
+body { font: 13px system-ui, sans-serif; margin: 16px; background: #fff; color: #222; }
+table { border-collapse: collapse; } td, th { border-bottom: 1px solid #ddd; padding: 4px 8px; vertical-align: middle; }
+th { position: sticky; top: 0; background: #f4f4f4; text-align: left; z-index: 1; }
+.t { width: ${tile}px; height: ${tile}px; background-repeat: no-repeat; border: 1px solid #ccc; }
+.na { width: ${tile}px; height: ${tile}px; display: flex; align-items: center; justify-content: center; color: #aaa; border: 1px dashed #ddd; }
+.cnig { max-width: ${tile}px; max-height: ${tile}px; }
+code { font-size: 12px; } .lab { max-width: 280px; }
+tr > :first-child { width: 130px; max-width: 130px; font-size: 11px; overflow-wrap: anywhere; }
+tr > :first-child code { font-size: 11px; } .cls { color: #777; font-size: 12px; }
+.pb { font-size: 12px; max-width: 360px; } .pb .w { color: #b45309; } .pb .i { color: #777; } .pb .ok { color: #2a7; }
+nav a { margin-right: 10px; }
+tr.sec td { background: #e8eef7; font-weight: 600; font-size: 15px; padding: 10px 8px; }
+tr.sec .n { font-weight: normal; font-size: 13px; color: #555; }
+.print { float: right; }
+.filter { margin: 8px 0 12px; padding: 6px 10px; background: #f4f4f4; display: inline-block; }
+.filter label { margin-right: 14px; cursor: pointer; }
+/* filtre : seulement les fiches avec un problème « ⚠ » ou une remarque « ℹ » ; sections vides masquées */
+body.only-notes tbody tr:not(.sec):not(.has-note),
+body.only-notes tbody[data-note="0"] { display: none; }
+/* impression (bouton « Imprimer / PDF », Ctrl+P) : A4 paysage, en-tête répété, une fiche jamais coupée */
+@page { size: A4 landscape; margin: 8mm; }
+@media print {
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { margin: 0; zoom: 0.72; }
+  nav, .print, .filter { display: none; }
+  th { position: static; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  tr.sec { break-after: avoid; }
+  tbody + tbody tr.sec { break-before: page; }
+  .lab { max-width: 220px; } .pb { max-width: 300px; }
+}
+</style></head><body>
+<button class="print" onclick="window.print()">Imprimer / PDF</button>
+<h1>Comparaison des symboles CNIG — rendu GeoServer et QGIS</h1>
+<p>CNIG <code>${sha}</code>. Échelle ≈ 1:${scale}. <b>attendu</b> : vignette du catalogue PDF CNIG.
+<b>QGIS</b> : QML CNIG d'origine rendu par QGIS. <b>prod</b> : STYLES actuels appliqués aux attributs métier.
+<b>Script</b> : SLD produit automatiquement à partir des QML CNIG (bin/qml2sld.py).
+Géométries de test : celles des vignettes du catalogue (surface, ligne et point superposés pour les fiches
+prescriptions / informations).
+<b>problèmes du symbole d'origine</b> : « ⚠ » défaut ou partie non reproductible, « ℹ » information ;
+écart au rendu QGIS signalé au-delà de ${deviation}.</p>
+<nav>${nav}</nav>
+<div class="filter"><label><input type="checkbox" id="only-notes"> n'afficher que les fiches avec un problème
+« ⚠ » ou une remarque « ℹ » : ${n_note} sur ${n_all} (dont ${n_warn} avec « ⚠ »)</label></div>
+${sections}
+<script>
+document.getElementById("only-notes").addEventListener("change", e =>
+  document.body.classList.toggle("only-notes", e.target.checked));
+</script>
+</body></html>

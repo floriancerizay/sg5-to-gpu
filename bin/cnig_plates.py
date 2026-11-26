@@ -11,6 +11,7 @@ rattachées aux codes de data/cnig_index.json :
 Sorties : report/cnig/*.png, report/cnig/plates.json ({"domaine:code": "fichier"}).
 Prérequis : poppler-utils (pdftoppm, pdftotext).
 """
+
 import re
 import subprocess
 import sys
@@ -24,12 +25,14 @@ from PIL import Image, ImageChops
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import CNIG_DIR, CNIG_INDEX, REPORT_DIR, read_json, write_json
 
-OUT = REPORT_DIR / "cnig"
+PLATES_DIR = REPORT_DIR / "cnig"
 DPI = 150
 NS = {"x": "http://www.w3.org/1999/xhtml"}
-PDFS = {"plu": "PLU/Catalogue_Symbolisation_CNIG_PLU.pdf",
-        "psmv": "PSMV/Catalogue_Symbolisation_CNIG_PSMV.pdf",
-        "sup": "SUP/Catalogue_Symbolisation_CNIG_SUP.pdf"}
+PDFS = {
+    "plu": "PLU/Catalogue_Symbolisation_CNIG_PLU.pdf",
+    "psmv": "PSMV/Catalogue_Symbolisation_CNIG_PSMV.pdf",
+    "sup": "SUP/Catalogue_Symbolisation_CNIG_SUP.pdf",
+}
 
 # Ligne de texte d'une page PDF, coordonnées en points (y vers le bas)
 Line = namedtuple("Line", "x0 y0 x1 y1 text")
@@ -92,29 +95,37 @@ def crop(img, box, margin=3):
 
 def page_title(lines):
     """« Prescriptions PLU », « Zonage PSMV », « Servitudes d'Utilité Publique »… (2e ligne du cartouche)."""
-    tops = sorted((l for l in lines if l.y0 < 70 and 120 < l.x0 < 420), key=lambda l: l.y0)
-    return " ".join(l.text for l in tops)
+    tops = sorted((line for line in lines if line.y0 < 70 and 120 < line.x0 < 420), key=lambda line: line.y0)
+    return " ".join(line.text for line in tops)
 
 
 def sheet_header(lines, width, sup=False):
     """Étiquette de la fiche : plus grande ligne du bandeau à droite (SUP : plus grande ligne « X|gen|ass »)."""
     if sup:
-        candidates = [l for l in lines if "|" in l.text]
+        candidates = [line for line in lines if "|" in line.text]
     else:
-        candidates = [l for l in lines if 45 < l.y0 < 160 and l.x1 > width * 0.55 and l.y1 - l.y0 > 13]
-    return max(candidates, key=lambda l: l.y1 - l.y0) if candidates else None
+        candidates = [
+            line for line in lines if 45 < line.y0 < 160 and line.x1 > width * 0.55 and line.y1 - line.y0 > 13
+        ]
+    return max(candidates, key=lambda line: line.y1 - line.y0) if candidates else None
 
 
 def plates_psc_inf(img, lines, head):
     """Fiche prescription / information : vignette entre l'étiquette, le panneau de droite et le symbole ponctuel."""
     key = norm(head.text)
-    label = next((l for l in lines if l.x0 < 300 and l.y0 > 60 and norm(l.text).startswith(key[:5])), None)
+    label = next(
+        (line for line in lines if line.x0 < 300 and line.y0 > 60 and norm(line.text).startswith(key[:5])), None
+    )
     if not label:
         return {}
-    panel_x = min((l.x0 for l in lines if l.text.startswith(("Symbole linéaire", "Symbole surfacique"))),
-                  default=label.x0 + 200)
-    point_y = min((l.y0 for l in lines if l.text.startswith("Symbole ponctuel") and l.y0 > label.y0),
-                  default=label.y0 + 160)
+    panel_x = min(
+        (line.x0 for line in lines if line.text.startswith(("Symbole linéaire", "Symbole surfacique"))),
+        default=label.x0 + 200,
+    )
+    point_y = min(
+        (line.y0 for line in lines if line.text.startswith("Symbole ponctuel") and line.y0 > label.y0),
+        default=label.y0 + 160,
+    )
     return {key: crop(img, (label.x0 - 8, label.y0 - 6, panel_x - 6, point_y - 8))}
 
 
@@ -122,9 +133,15 @@ def plates_zone(img, lines, head):
     """Fiche de zonage : une vignette par étiquette de cadre (deux en PLU : _ge puis _pe)."""
     key = norm(head.text)
     # étiquettes de cadre (petite police) ; exclut le libellé dessiné dans la carte
-    labels = sorted((l for l in lines if l.x0 < 200 and l.y0 > 80 and l.text.strip() == key and l.y1 - l.y0 < 14),
-                    key=lambda l: l.y0)
-    desc_x = min((l.x0 for l in lines if l.text.startswith(("***", "Ligne", "Remplissage"))), default=180)
+    labels = sorted(
+        (
+            line
+            for line in lines
+            if line.x0 < 200 and line.y0 > 80 and line.text.strip() == key and line.y1 - line.y0 < 14
+        ),
+        key=lambda line: line.y0,
+    )
+    desc_x = min((line.x0 for line in lines if line.text.startswith(("***", "Ligne", "Remplissage"))), default=180)
     out = {}
     for i, label in enumerate(labels):
         bottom = labels[i + 1].y0 - 8 if i + 1 < len(labels) else label.y0 + 170
@@ -135,17 +152,17 @@ def plates_zone(img, lines, head):
 
 def plates_sup(img, lines, head, width):
     """Fiche SUP : dessin sous l'en-tête, partagé par l'en-tête et les « Symboles concernés »."""
-    below = [l for l in lines if l.y0 > head.y1 + 15 and l.x0 < 100]
-    bottom = min((l.y0 for l in below), default=head.y1 + 200)
+    below = [line for line in lines if line.y0 > head.y1 + 15 and line.x0 < 100]
+    bottom = min((line.y0 for line in below), default=head.y1 + 200)
     picture = crop(img, (20, head.y1 + 4, width - 20, bottom - 6))
     codes = [norm(head.text)]
     listed = False
-    for l in sorted(lines, key=lambda l: l.y0):
-        if l.text.startswith("Symboles concernés"):
+    for line in sorted(lines, key=lambda line: line.y0):
+        if line.text.startswith("Symboles concernés"):
             listed = True
-        elif listed and "|" in l.text:
-            codes += l.text.split()
-    return {c: picture for c in codes}
+        elif listed and "|" in line.text:
+            codes += line.text.split()
+    return dict.fromkeys(codes, picture)
 
 
 def extract(domain, pdf):
@@ -154,7 +171,7 @@ def extract(domain, pdf):
     with tempfile.TemporaryDirectory() as tmp:
         subprocess.run(["pdftoppm", "-r", str(DPI), "-png", str(pdf), f"{tmp}/p"], check=True)
         images = sorted(Path(tmp).glob("p-*.png"))
-        for (width, lines), img_path in zip(pages_lines(pdf), images):
+        for (width, lines), img_path in zip(pages_lines(pdf), images, strict=True):
             head = sheet_header(lines, width, sup=domain == "sup")
             if not head:
                 continue
@@ -174,7 +191,7 @@ def extract(domain, pdf):
                 if picture is None:
                     continue
                 name = f"{domain}_{genre}_{re.sub(r'[^A-Za-z0-9_-]+', '_', key)}.png"
-                picture.save(OUT / name)
+                picture.save(PLATES_DIR / name)
                 found[(genre, key)] = name
     return found
 
@@ -195,8 +212,8 @@ def plate_key(e, found):
 
 def main():
     index = read_json(CNIG_INDEX)
-    OUT.mkdir(parents=True, exist_ok=True)
-    for f in OUT.glob("*.png"):
+    PLATES_DIR.mkdir(parents=True, exist_ok=True)
+    for f in PLATES_DIR.glob("*.png"):
         f.unlink()
     mapping = {}
     for domain, rel in PDFS.items():
@@ -210,7 +227,7 @@ def main():
                 mapping[f"{domain}:{e['code']}"] = found[key]
                 attached += 1
         print(f"✅ {domain} : {len(found)} vignettes extraites, {attached} codes rattachés")
-    write_json(OUT / "plates.json", mapping)
+    write_json(PLATES_DIR / "plates.json", mapping)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,10 @@ Lecture et écriture de SLD au format des styles de production (STYLES/data/du) 
     → <préfixe>X.svg?… ; doublons « plain fallback » et <Stroke/> vides supprimés ; Gap → stroke-dasharray ;
     VendorOption QGIS supprimées.
 """
+
+import contextlib
 import copy
+import functools
 import hashlib
 import re
 from xml.sax.saxutils import escape
@@ -58,6 +61,7 @@ def symbolizers(rule):
 
 
 # --- Réécritures ------------------------------------------------------------------------------
+
 
 def _rename_ns(el):
     """Tout élément non-ogc passe dans l'espace sld, SvgParameter → CssParameter."""
@@ -122,10 +126,8 @@ def _fix_marks(el):
                 # shape://slash|backslash : diagonale de la tuile → espacement = taille / √2
                 size_el = child(graphic, "Size")
                 if new_name in ("shape://slash", "shape://backslash") and size_el is not None:
-                    try:
-                        size_el.text = _num(float(_literal_value(size_el)) * 2 ** .5)
-                    except ValueError:
-                        pass
+                    with contextlib.suppress(ValueError):
+                        size_el.text = _num(float(_literal_value(size_el)) * 2**0.5)
                 if rot is None:
                     if rot_el is not None:
                         graphic.remove(rot_el)
@@ -146,7 +148,7 @@ def _fix_marks(el):
 
 
 def _num(v):
-    return ("%.2f" % v).rstrip("0").rstrip(".")
+    return f"{v:.2f}".rstrip("0").rstrip(".")
 
 
 def normalize_href(href, prefix):
@@ -223,6 +225,13 @@ def normalize_symbolizer(sym, href_prefix=None):
     return sym
 
 
+@functools.cache
+def image_version(path):
+    """Empreinte courte du contenu d'une image, ajoutée à son URL (`v=…`) : GeoServer garde les images en cache
+    par URL, une image modifiée sous le même nom resterait affichée dans son ancienne version."""
+    return hashlib.sha1(path.read_bytes()).hexdigest()[:10]
+
+
 def body_hash(syms):
     """Empreinte de symboliseurs (pour rapprocher des symboles identiques)."""
     return hashlib.sha1("\n".join(to_xml(s) for s in syms).encode()).hexdigest()
@@ -254,14 +263,15 @@ def filter_xml(conditions, depth):
 
     def equal(prop, value, d):
         p = "  " * d
-        return (f"{p}<ogc:PropertyIsEqualTo>\n{p}  <ogc:PropertyName>{prop}</ogc:PropertyName>\n"
-                f"{p}  <ogc:Literal>{escape(value)}</ogc:Literal>\n{p}</ogc:PropertyIsEqualTo>")
+        return (
+            f"{p}<ogc:PropertyIsEqualTo>\n{p}  <ogc:PropertyName>{prop}</ogc:PropertyName>\n"
+            f"{p}  <ogc:Literal>{escape(value)}</ogc:Literal>\n{p}</ogc:PropertyIsEqualTo>"
+        )
 
     if len(conditions) == 1:
         inner = equal(*conditions[0], depth + 1)
     else:
-        inner = (f"{pad}  <ogc:And>\n" + "\n".join(equal(*c, depth + 2) for c in conditions)
-                 + f"\n{pad}  </ogc:And>")
+        inner = f"{pad}  <ogc:And>\n" + "\n".join(equal(*c, depth + 2) for c in conditions) + f"\n{pad}  </ogc:And>"
     return f"{pad}<ogc:Filter>\n{inner}\n{pad}</ogc:Filter>"
 
 

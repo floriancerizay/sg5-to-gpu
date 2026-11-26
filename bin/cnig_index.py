@@ -10,6 +10,7 @@ Usage :
   bin/cnig_index.py                 écrit data/cnig_index.json (+ archive data/cnig_index.<sha>.json)
   bin/cnig_index.py --since <sha>   + codes ajoutés / modifiés / supprimés depuis <sha> (data/cnig_diff.json)
 """
+
 import argparse
 import csv
 import hashlib
@@ -24,8 +25,12 @@ from config import CNIG_DIR, CNIG_GRILLES, CNIG_INDEX, ROOT, cnig_sha, read_json
 
 # (famille, géométrie) → couche GPU
 GEOM_LAYER = {
-    ("PSC", "S"): "prescription_surf", ("PSC", "L"): "prescription_lin", ("PSC", "P"): "prescription_pct",
-    ("INF", "S"): "info_surf", ("INF", "L"): "info_lin", ("INF", "P"): "info_pct",
+    ("PSC", "S"): "prescription_surf",
+    ("PSC", "L"): "prescription_lin",
+    ("PSC", "P"): "prescription_pct",
+    ("INF", "S"): "info_surf",
+    ("INF", "L"): "info_lin",
+    ("INF", "P"): "info_pct",
 }
 SVG_HREF_RE = re.compile(r'xlink:href="([^"?]+\.svg)', re.IGNORECASE)
 
@@ -87,17 +92,20 @@ def index_psc_inf(domain):
             for geom, col in (("S", "symb_surf"), ("L", "symb_lin"), ("P", "symb_pct")):
                 if not row.get(col):
                     continue
-                out.append(entry(
-                    domain, row[col],
-                    layer=GEOM_LAYER[(prefix, geom)],
-                    attrs={attr: row[attr], "s" + attr: row["s" + attr]},
-                    variant=row["nnn"],
-                    label=clean(row["lib_stype"]),
-                    classement=row["classement"],
-                    # Grilles PLU depuis CNIG 2a50e2c : `etiquette` vide pour les sous-codes, l'étiquette
-                    # complète est dans `etq_total` (même valeur que l'ancienne colonne `etiquette`)
-                    etiquette=row.get("etiquette") or row.get("etq_total"),
-                ))
+                out.append(
+                    entry(
+                        domain,
+                        row[col],
+                        layer=GEOM_LAYER[(prefix, geom)],
+                        attrs={attr: row[attr], "s" + attr: row["s" + attr]},
+                        variant=row["nnn"],
+                        label=clean(row["lib_stype"]),
+                        classement=row["classement"],
+                        # Grilles PLU depuis CNIG 2a50e2c : `etiquette` vide pour les sous-codes, l'étiquette
+                        # complète est dans `etq_total` (même valeur que l'ancienne colonne `etiquette`)
+                        etiquette=row.get("etiquette") or row.get("etq_total"),
+                    )
+                )
     return out
 
 
@@ -106,8 +114,13 @@ def index_zone(domain):
     plus les codes ZONE / SECTEUR présents en SLD mais absents des grilles (ZONE_A_001 PSMV, SECTEUR_xx)."""
     out = []
     for row in read_grille(f"grille_{domain}_zonage.csv"):
-        common = {"layer": "zone_urba", "attrs": {"typezone": row["typezone"]}, "variant": "001",
-                  "label": clean(row["lib_type"]), "classement": "symbole"}
+        common = {
+            "layer": "zone_urba",
+            "attrs": {"typezone": row["typezone"]},
+            "variant": "001",
+            "label": clean(row["lib_type"]),
+            "classement": "symbole",
+        }
         if domain == "plu":
             for col, scale in (("symb_sup2500", "ge"), ("symb_inf2500", "pe")):
                 out.append(entry(domain, row[col], **common, scale=scale))
@@ -121,8 +134,18 @@ def index_zone(domain):
             continue
         kind, typ, nnn, scale = m.groups()
         layer, attr = ("zone_urba", "typezone") if kind == "ZONE" else ("secteur_cc", "typesect")
-        out.append(entry(domain, sld.stem, layer=layer, attrs={attr: typ}, variant=nnn,
-                         label=None, classement="hors-grille", **({"scale": scale} if scale else {})))
+        out.append(
+            entry(
+                domain,
+                sld.stem,
+                layer=layer,
+                attrs={attr: typ},
+                variant=nnn,
+                label=None,
+                classement="hors-grille",
+                **({"scale": scale} if scale else {}),
+            )
+        )
     return out
 
 
@@ -135,8 +158,17 @@ def index_extra_sld(domain, known):
             continue
         prefix, geom, typ, styp, nnn = m.groups()
         attr = "typepsc" if prefix == "PSC" else "typeinf"
-        out.append(entry(domain, sld.stem, layer=GEOM_LAYER[(prefix, geom)],
-                         attrs={attr: typ, "s" + attr: styp}, variant=nnn, label=None, classement="hors-grille"))
+        out.append(
+            entry(
+                domain,
+                sld.stem,
+                layer=GEOM_LAYER[(prefix, geom)],
+                attrs={attr: typ, "s" + attr: styp},
+                variant=nnn,
+                label=None,
+                classement="hors-grille",
+            )
+        )
     return out
 
 
@@ -156,11 +188,14 @@ def qml_symbols(qml_path):
             label, n = rule.get("label"), 2
             while label in out:  # libellé en double (ex. I3 dans ASSIETTE_SUP_S) : règles distinctes
                 label, n = f"{rule.get('label')} ({n})", n + 1
-            out[label] = (symbol, {
-                "filter": rule.get("filter"),
-                "scalemaxdenom": rule.get("scalemaxdenom"),
-                "scalemindenom": rule.get("scalemindenom"),
-            })
+            out[label] = (
+                symbol,
+                {
+                    "filter": rule.get("filter"),
+                    "scalemaxdenom": rule.get("scalemaxdenom"),
+                    "scalemindenom": rule.get("scalemindenom"),
+                },
+            )
     return out
 
 
@@ -172,18 +207,20 @@ def index_sup():
     for row in read_grille("grille_sup.csv"):
         code = row["symb_sup"]
         symbol = symbols.get(code, (None, {}))[0]
-        out.append({
-            "code": code,
-            "domain": "sup",
-            "layer": "assiette_sup_s",
-            "attrs": {"suptype": row["typesup"].lower()},
-            "variant": None,
-            "label": clean(row["lib_sup"]),
-            "classement": row["classement"],
-            "etiquette": row.get("etiquette"),
-            "qml": str(qml.relative_to(CNIG_DIR)),
-            "sha1": hashlib.sha1(ET.tostring(symbol)).hexdigest() if symbol is not None else None,
-        })
+        out.append(
+            {
+                "code": code,
+                "domain": "sup",
+                "layer": "assiette_sup_s",
+                "attrs": {"suptype": row["typesup"].lower()},
+                "variant": None,
+                "label": clean(row["lib_sup"]),
+                "classement": row["classement"],
+                "etiquette": row.get("etiquette"),
+                "qml": str(qml.relative_to(CNIG_DIR)),
+                "sha1": hashlib.sha1(ET.tostring(symbol)).hexdigest() if symbol is not None else None,
+            }
+        )
     return out
 
 
@@ -199,8 +236,10 @@ def build_index():
 
 def diff_index(old, new):
     """Codes ajoutés, supprimés et modifiés (empreinte différente) entre deux index."""
+
     def by_key(index):
-        return {f'{e["domain"]}:{e["code"]}': e for e in index["entries"]}
+        return {f"{e['domain']}:{e['code']}": e for e in index["entries"]}
+
     o, n = by_key(old), by_key(new)
     return {
         "added": sorted(set(n) - set(o)),
@@ -223,7 +262,9 @@ def main():
     by_layer = {}
     for e in index["entries"]:
         by_layer.setdefault((e["domain"], e["layer"]), []).append(e)
-    print(f"✅ {CNIG_INDEX.relative_to(ROOT)} — CNIG {index['sha'] and index['sha'][:7]}, {len(index['entries'])} codes")
+    print(
+        f"✅ {CNIG_INDEX.relative_to(ROOT)} — CNIG {index['sha'] and index['sha'][:7]}, {len(index['entries'])} codes"
+    )
     for (domain, layer), entries in sorted(by_layer.items()):
         missing = sum(1 for e in entries if domain != "sup" and not e["sld"])
         print(f"   {domain:5} {layer:18} {len(entries):4} codes" + (f"  ({missing} sans SLD)" if missing else ""))
@@ -233,8 +274,10 @@ def main():
         diff = diff_index(old, index)
         diff_path = CNIG_INDEX.with_name("cnig_diff.json")
         write_json(diff_path, diff)
-        print(f"Depuis {args.since[:7]} : +{len(diff['added'])} / ~{len(diff['changed'])} / -{len(diff['removed'])}"
-              f" → {diff_path.relative_to(ROOT)}")
+        print(
+            f"Depuis {args.since[:7]} : +{len(diff['added'])} / ~{len(diff['changed'])} / -{len(diff['removed'])}"
+            f" → {diff_path.relative_to(ROOT)}"
+        )
 
 
 if __name__ == "__main__":

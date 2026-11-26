@@ -19,10 +19,10 @@ SUP : échelles de STYLES/data/sup/<suptype>/assiette_sup_s.xml.
 
 Usage : bin/build_slds.py [--validate]   (--validate : publication d'essai sur le GeoServer local)
 """
+
 import argparse
 import copy
 import csv
-import hashlib
 import re
 import shutil
 import sys
@@ -32,41 +32,73 @@ from xml.sax.saxutils import escape
 from lxml import etree
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import (CNIG_INDEX, COUCHES_DIR, FONTS_DIR, GEOSERVER_URL, ROOT, SCRIPT_DIR, SLD_IMG_URL, SLDS_DIR,
-                    STYLES_DIR, SVG_DIR, read_json)
 import geoserver
-import sld_normalize as N
+import sld
+from config import (
+    CNIG_INDEX,
+    COUCHES_DIR,
+    FONTS_DIR,
+    GEOSERVER_URL,
+    ROOT,
+    SCRIPT_DIR,
+    SLD_IMG_URL,
+    SLDS_DIR,
+    STYLES_DIR,
+    SVG_DIR,
+    read_json,
+)
 from qml2sld import ogc_conditions
 
-OUT = SLDS_DIR
 DOMAIN_SUFFIX = {"plu": "du", "psmv": "psmv"}
 # couche GPU → (attribut du type, attribut du sous-type)
-KEYS = {"prescription_surf": ("typepsc", "stypepsc"), "prescription_lin": ("typepsc", "stypepsc"),
-        "prescription_pct": ("typepsc", "stypepsc"), "info_surf": ("typeinf", "stypeinf"),
-        "info_lin": ("typeinf", "stypeinf"), "info_pct": ("typeinf", "stypeinf"),
-        "zone_urba": ("typezone", None), "secteur_cc": ("typesect", None)}
+KEYS = {
+    "prescription_surf": ("typepsc", "stypepsc"),
+    "prescription_lin": ("typepsc", "stypepsc"),
+    "prescription_pct": ("typepsc", "stypepsc"),
+    "info_surf": ("typeinf", "stypeinf"),
+    "info_lin": ("typeinf", "stypeinf"),
+    "info_pct": ("typeinf", "stypeinf"),
+    "zone_urba": ("typezone", None),
+    "secteur_cc": ("typesect", None),
+}
 DUAL_SCALE = {"zone_urba", "secteur_cc"}  # règles lowscale / highscale
 # (MinScaleDenominator, MaxScaleDenominator) des échelles de production
 SCALES = {"detail": (None, 15000), "lowscale": (15000, 150000), "highscale": (None, 15000)}
 PROD_ONLY = ("document", "municipality", "scot", "mec")  # couches hors CNIG, reprises telles quelles
-SUP_TABLES = ("generateur_sup_p", "assiette_sup_p", "generateur_sup_l", "assiette_sup_l", "generateur_sup_s",
-              "assiette_sup_s")
+SUP_TABLES = (
+    "generateur_sup_p",
+    "assiette_sup_p",
+    "generateur_sup_l",
+    "assiette_sup_l",
+    "generateur_sup_s",
+    "assiette_sup_s",
+)
 # écarts listés dans DIFFERENCES.md, par rubrique
-NOTES = {"Échelles": [], "Variantes écartées (classiques)": [], "Règles de production conservées": [],
-         "Règles de production abandonnées": [], "Couches reprises de la production": [], "Sans style CNIG": []}
+NOTES = {
+    "Échelles": [],
+    "Variantes écartées (classiques)": [],
+    "Règles de production conservées": [],
+    "Règles de production abandonnées": [],
+    "Couches reprises de la production": [],
+    "Sans style CNIG": [],
+}
 
 
 # --- lecture ------------------------------------------------------------------------------------
 
+
 def load():
     """(entrées de l'index CNIG, SLD par code, règles d'assiette SUP) des étapes 1 et 3."""
-    return (read_json(CNIG_INDEX)["entries"], read_json(SCRIPT_DIR / "index.json"),
-            read_json(SCRIPT_DIR / "sup_rules.json"))
+    return (
+        read_json(CNIG_INDEX)["entries"],
+        read_json(SCRIPT_DIR / "index.json"),
+        read_json(SCRIPT_DIR / "sup_rules.json"),
+    )
 
 
 def symbolizers(entry):
     """Symboliseurs d'un SLD par code (entrée de index.json ou de sup_rules.json)."""
-    return N.symbolizers(N.rules(N.parse(SCRIPT_DIR / entry["file"]))[0])
+    return sld.symbolizers(sld.rules(sld.parse(SCRIPT_DIR / entry["file"]))[0])
 
 
 def with_label(syms, prop):
@@ -74,15 +106,15 @@ def with_label(syms, prop):
     out = []
     for s in syms:
         s = copy.deepcopy(s)
-        if N.local(s) == "TextSymbolizer":
-            for p in s.iter(f"{{{N.NS_OGC}}}PropertyName"):
+        if sld.local(s) == "TextSymbolizer":
+            for p in s.iter(f"{{{sld.NS_OGC}}}PropertyName"):
                 p.text = prop
         out.append(s)
     return out
 
 
 def without_labels(syms):
-    return [s for s in syms if N.local(s) != "TextSymbolizer"]
+    return [s for s in syms if sld.local(s) != "TextSymbolizer"]
 
 
 # --- images -------------------------------------------------------------------------------------
@@ -93,25 +125,28 @@ USED_IMAGES = set()  # images référencées, copiées dans data/slds/img
 def publish_hrefs(syms):
     """hrefs relatifs « X.svg?… » → SLD_IMG_URL/X.svg?…&v=<empreinte> (cache GeoServer par URL)."""
     for s in syms:
-        for res in s.iter(f"{{{N.NS_SLD}}}OnlineResource"):
-            href = res.get(f"{{{N.NS_XLINK}}}href") or ""
+        for res in s.iter(f"{{{sld.NS_SLD}}}OnlineResource"):
+            href = res.get(f"{{{sld.NS_XLINK}}}href") or ""
             if "://" in href:
                 continue
             name, _, query = href.partition("?")
             path = SVG_DIR / name
             if path.is_file():
                 USED_IMAGES.add(name)
-                v = hashlib.sha1(path.read_bytes()).hexdigest()[:10]
+                v = sld.image_version(path)
                 query = f"{query}&v={v}" if query else f"v={v}"
-            res.set(f"{{{N.NS_XLINK}}}href", f"{SLD_IMG_URL}{name}" + (f"?{query}" if query else ""))
+            res.set(f"{{{sld.NS_XLINK}}}href", f"{SLD_IMG_URL}{name}" + (f"?{query}" if query else ""))
     return syms
 
 
 # --- écriture de règles -------------------------------------------------------------------------
 
+
 def eq(prop, value):
-    return (f"<ogc:PropertyIsEqualTo><ogc:PropertyName>{prop}</ogc:PropertyName>"
-            f"<ogc:Literal>{escape(value)}</ogc:Literal></ogc:PropertyIsEqualTo>")
+    return (
+        f"<ogc:PropertyIsEqualTo><ogc:PropertyName>{prop}</ogc:PropertyName>"
+        f"<ogc:Literal>{escape(value)}</ogc:Literal></ogc:PropertyIsEqualTo>"
+    )
 
 
 def rule(name, title, filter_inner, syms, scale, depth=4):
@@ -126,7 +161,7 @@ def rule(name, title, filter_inner, syms, scale, depth=4):
         out.append(f"{pad}  <sld:MinScaleDenominator>{mn}</sld:MinScaleDenominator>")
     if mx is not None:
         out.append(f"{pad}  <sld:MaxScaleDenominator>{mx}</sld:MaxScaleDenominator>")
-    out += [N.to_xml(s, depth + 1) for s in publish_hrefs(syms)]
+    out += [sld.to_xml(s, depth + 1) for s in publish_hrefs(syms)]
     out.append(f"{pad}</sld:Rule>")
     return "\n".join(out)
 
@@ -138,20 +173,25 @@ def write(path, text):
 
 # --- règles de production -----------------------------------------------------------------------
 
+
 def _branches(flt):
     """Branches « ou » d'un filtre de production : [{attribut: valeur}] ; None si filtre complexe
     (différent de, nul…)."""
     root = next(iter(flt), None)
     if root is None:
         return None
-    if any(N.local(c) in ("PropertyIsNotEqualTo", "PropertyIsNull", "Not") for c in flt.iter()):
+    if any(sld.local(c) in ("PropertyIsNotEqualTo", "PropertyIsNull", "Not") for c in flt.iter()):
         return None
-    tops = list(root) if N.local(root) == "Or" else [root]
+    tops = list(root) if sld.local(root) == "Or" else [root]
     out = []
     for t in tops:
-        pairs = [t] if N.local(t) == "PropertyIsEqualTo" else [c for c in t if N.local(c) == "PropertyIsEqualTo"]
-        out.append({(N.child(p, "PropertyName").text or "").strip(): (N.child(p, "Literal").text or "").strip()
-                    for p in pairs})
+        pairs = [t] if sld.local(t) == "PropertyIsEqualTo" else [c for c in t if sld.local(c) == "PropertyIsEqualTo"]
+        out.append(
+            {
+                (sld.child(p, "PropertyName").text or "").strip(): (sld.child(p, "Literal").text or "").strip()
+                for p in pairs
+            }
+        )
     return out
 
 
@@ -163,35 +203,42 @@ def prod_rules(layer, covered_types, out_name):
         return []
     type_attr = KEYS[layer][0]
     kept = []
-    for r in N.rules(N.parse(path)):
-        name = (N.child(r, "Name").text or "").strip()
-        flt = N.child(r, "Filter")
+    for r in sld.rules(sld.parse(path)):
+        name = (sld.child(r, "Name").text or "").strip()
+        flt = sld.child(r, "Filter")
         branches = _branches(flt) if flt is not None else None
         if branches is None:
-            NOTES["Règles de production abandonnées"].append(f"{out_name} : « {name} » (filtre d'exclusion, couvert "
-                                                             f"par les replis CNIG)")
+            NOTES["Règles de production abandonnées"].append(
+                f"{out_name} : « {name} » (filtre d'exclusion, couvert par les replis CNIG)"
+            )
             continue
         free = [b for b in branches if b.get(type_attr) not in covered_types]
         if not free:
             continue
         if len(free) < len(branches):  # filtre réduit aux valeurs non couvertes
-            inner = "".join("<ogc:And>" + "".join(eq(k, v) for k, v in b.items()) + "</ogc:And>"
-                            if len(b) > 1 else eq(*next(iter(b.items()))) for b in free)
+            inner = "".join(
+                "<ogc:And>" + "".join(eq(k, v) for k, v in b.items()) + "</ogc:And>"
+                if len(b) > 1
+                else eq(*next(iter(b.items())))
+                for b in free
+            )
             r.replace(flt, ogc_filter(f"<ogc:Or>{inner}</ogc:Or>" if len(free) > 1 else inner))
             NOTES["Règles de production conservées"].append(
-                f"{out_name} : « {name} » réduite à {', '.join(b[type_attr] for b in free)}")
+                f"{out_name} : « {name} » réduite à {', '.join(b[type_attr] for b in free)}"
+            )
         else:
             NOTES["Règles de production conservées"].append(f"{out_name} : « {name} »")
-        kept.append(N.to_xml(r, 4))
+        kept.append(sld.to_xml(r, 4))
     return kept
 
 
 def ogc_filter(inner):
     """Élément ogc:Filter à partir de son contenu XML."""
-    return etree.fromstring(f'<ogc:Filter xmlns:ogc="{N.NS_OGC}">{inner}</ogc:Filter>')
+    return etree.fromstring(f'<ogc:Filter xmlns:ogc="{sld.NS_OGC}">{inner}</ogc:Filter>')
 
 
 # --- couches DU / PSMV --------------------------------------------------------------------------
+
 
 def zone_base(code):
     """Code de zone sans suffixe d'échelle : ZONE_U_001_ge → ZONE_U_001."""
@@ -209,21 +256,22 @@ def build_du(index, styles):
                 if f"{domain}:{e['code']}" not in styles:
                     NOTES["Sans style CNIG"].append(f"{out_name} : {e['code']}")
             if layer == "secteur_cc" and domain == "psmv":  # pas de secteurs PSMV : copie du DU (comme la production)
-                styled = [e for e in index if e["domain"] == "plu" and e["layer"] == layer
-                          and f"plu:{e['code']}" in styles]
+                styled = [
+                    e for e in index if e["domain"] == "plu" and e["layer"] == layer and f"plu:{e['code']}" in styles
+                ]
             if layer in DUAL_SCALE:
                 classic, symbols = dual_scale_rules(styled, styles, layer, tattr)
             else:
                 classic, symbols = detail_rules(styled, styles, tattr, sattr, out_name)
             types = {e["attrs"].get(tattr) for e in styled}
             classic += prod_rules(layer, types, out_name)
-            write(OUT / "classiques/du" / f"{out_name}.sld", N.sld_document(layer, classic))
+            write(SLDS_DIR / "classiques/du" / f"{out_name}.sld", sld.sld_document(layer, classic))
             if symbols:
-                write(OUT / "symboles/du" / f"{out_name}.sld", N.sld_document(layer, symbols))
+                write(SLDS_DIR / "symboles/du" / f"{out_name}.sld", sld.sld_document(layer, symbols))
     for name in PROD_ONLY:
         src = STYLES_DIR / "SLDS/notsup" / f"{name}.sld"
         if src.is_file():
-            shutil.copyfile(src, OUT / "classiques/du" / src.name)
+            shutil.copyfile(src, SLDS_DIR / "classiques/du" / src.name)
             NOTES["Couches reprises de la production"].append(f"du/{src.name}")
 
 
@@ -242,13 +290,16 @@ def detail_rules(styled, styles, tattr, sattr, out_name):
             NOTES["Variantes écartées (classiques)"].append(f"{out_name} : {other['code']} (gardé : {first['code']})")
         by_type.setdefault(t, []).append(st)
         syms = without_labels(symbolizers(styles[f"{first['domain']}:{first['code']}"]))
-        classic.append(rule(f"{t}-{st}", first.get("label"),
-                            f"<ogc:And>{eq(tattr, t)}{eq(sattr, st)}</ogc:And>", syms, "detail"))
+        classic.append(
+            rule(f"{t}-{st}", first.get("label"), f"<ogc:And>{eq(tattr, t)}{eq(sattr, st)}</ogc:And>", syms, "detail")
+        )
     for t, sts in sorted(by_type.items()):  # repli : autres sous-types du type, symbole tt-00
         ref = (groups.get((t, "00")) or groups[(t, sts[0])])[0]
         others = "".join(eq(sattr, st) for st in sts)
-        flt = (f"<ogc:And>{eq(tattr, t)}<ogc:Not>{'<ogc:Or>' + others + '</ogc:Or>' if len(sts) > 1 else others}"
-               f"</ogc:Not></ogc:And>")
+        flt = (
+            f"<ogc:And>{eq(tattr, t)}<ogc:Not>{'<ogc:Or>' + others + '</ogc:Or>' if len(sts) > 1 else others}"
+            f"</ogc:Not></ogc:And>"
+        )
         syms = without_labels(symbolizers(styles[f"{ref['domain']}:{ref['code']}"]))
         classic.append(rule(f"{t}-autres", f"{ref.get('label')} (autres sous-types)", flt, syms, "detail"))
     return classic, symbols
@@ -264,22 +315,27 @@ def dual_scale_rules(styled, styles, layer, tattr):
     for t, variants in sorted(by_type.items()):
         low = variants.get("pe") or variants.get("") or variants.get("ge")
         high = variants.get("ge") or variants.get("") or variants.get("pe")
-        label = [s for s in symbolizers(styles[f"{high['domain']}:{high['code']}"])
-                 if N.local(s) == "TextSymbolizer"]
+        label = [s for s in symbolizers(styles[f"{high['domain']}:{high['code']}"]) if sld.local(s) == "TextSymbolizer"]
         base = zone_base(high["code"])
         for scale, e in (("lowscale", low), ("highscale", high)):
             syms = without_labels(symbolizers(styles[f"{e['domain']}:{e['code']}"]))
-            classic.append(rule(f"{t}-{scale}", e.get("label"), eq(tattr, t), syms + with_label(label, "libelle"), scale))
-            symbols.append(rule(f"{base}-{scale}", e.get("label"), eq("symbole", base),
-                                syms + with_label(label, tattr), scale))
+            classic.append(
+                rule(f"{t}-{scale}", e.get("label"), eq(tattr, t), syms + with_label(label, "libelle"), scale)
+            )
+            symbols.append(
+                rule(f"{base}-{scale}", e.get("label"), eq("symbole", base), syms + with_label(label, tattr), scale)
+            )
     if any(v.get("ge") or v.get("pe") for v in by_type.values()):
-        NOTES["Échelles"].append(f"{layer} : variantes CNIG _ge (≥ 1:2 500) / _pe (< 1:2 500) placées sur les échelles "
-                                 f"de production : _pe en « lowscale » 1:15 000 – 1:150 000, _ge en « highscale » "
-                                 f"< 1:15 000")
+        NOTES["Échelles"].append(
+            f"{layer} : variantes CNIG _ge (≥ 1:2 500) / _pe (< 1:2 500) placées sur les échelles "
+            f"de production : _pe en « lowscale » 1:15 000 – 1:150 000, _ge en « highscale » "
+            f"< 1:15 000"
+        )
     return classic, symbols
 
 
 # --- SUP ----------------------------------------------------------------------------------------
+
 
 def prod_sup_fragment(suptype, table):
     """Règles de production d'une table SUP (entre <!--BEGIN--> et <!--END--> de STYLES/data/sup), ou None."""
@@ -325,28 +381,36 @@ def build_sup(index, styles, sup_rules):
                 scale = prod_sup_scale(st)
                 if table == "assiette_sup_s" and st in cnig:
                     for r in cnig[st]:
-                        classic.append(rule(r["label"], r["label"], _and(ogc_conditions(st, r["attrs"])),
-                                            symbolizers(r), scale))
+                        classic.append(
+                            rule(r["label"], r["label"], _and(ogc_conditions(st, r["attrs"])), symbolizers(r), scale)
+                        )
                         if st not in seen_scale and str(r.get("max_scale") or "") != str(scale[1] or ""):
-                            NOTES["Échelles"].append(f"SUP {st} : QML 1:{r.get('max_scale') or '—'} max, production "
-                                                     f"{scale[0] or '—'} – {scale[1] or '—'} (production gardée)")
+                            NOTES["Échelles"].append(
+                                f"SUP {st} : QML 1:{r.get('max_scale') or '—'} max, production "
+                                f"{scale[0] or '—'} – {scale[1] or '—'} (production gardée)"
+                            )
                             seen_scale.add(st)
                 else:
                     frag = prod_sup_fragment(st, table)
                     if frag:
                         classic.append(frag)
                         if table == "assiette_sup_s":
-                            NOTES["Règles de production conservées"].append(f"sup/{base}/{table} : {st} (pas de règle CNIG)")
+                            NOTES["Règles de production conservées"].append(
+                                f"sup/{base}/{table} : {st} (pas de règle CNIG)"
+                            )
                 if table == "assiette_sup_s":
                     for e in sorted(codes.get(st, []), key=lambda e: e["code"]):
                         key = f"sup:{e['code']}"
                         if key in styles:
-                            symbols.append(rule(e["code"], e.get("label"), eq("symbole", e["code"]),
-                                                symbolizers(styles[key]), scale))
+                            symbols.append(
+                                rule(
+                                    e["code"], e.get("label"), eq("symbole", e["code"]), symbolizers(styles[key]), scale
+                                )
+                            )
             if classic:
-                write(OUT / "classiques/sup" / base / f"{table}.sld", N.sld_document("One style", classic))
+                write(SLDS_DIR / "classiques/sup" / base / f"{table}.sld", sld.sld_document("One style", classic))
             if symbols:
-                write(OUT / "symboles/sup" / base / f"{table}.sld", N.sld_document("One style", symbols))
+                write(SLDS_DIR / "symboles/sup" / base / f"{table}.sld", sld.sld_document("One style", symbols))
 
 
 def _and(conditions):
@@ -356,25 +420,30 @@ def _and(conditions):
 
 # --- images, polices, différences, validation ---------------------------------------------------
 
+
 def copy_resources():
     """Images référencées et polices, à déployer avec les SLD."""
-    (OUT / "img").mkdir(parents=True, exist_ok=True)
+    (SLDS_DIR / "img").mkdir(parents=True, exist_ok=True)
     for name in sorted(USED_IMAGES):
-        shutil.copyfile(SVG_DIR / name, OUT / "img" / name)
-    (OUT / "fonts").mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(SVG_DIR / name, SLDS_DIR / "img" / name)
+    (SLDS_DIR / "fonts").mkdir(parents=True, exist_ok=True)
     for f in FONTS_DIR.glob("*"):
-        shutil.copyfile(f, OUT / "fonts" / f.name)
+        shutil.copyfile(f, SLDS_DIR / "fonts" / f.name)
 
 
 def write_differences():
-    lines = ["# Différences avec le CNIG et la production", "",
-             "Généré par `bin/build_slds.py`. Images : `" + SLD_IMG_URL + "` (dossier `img/` à y déployer), "
-             "polices : dossier `fonts/` (à installer dans `styles/fonts` de GeoServer).", ""]
+    lines = [
+        "# Différences avec le CNIG et la production",
+        "",
+        "Généré par `bin/build_slds.py`. Images : `" + SLD_IMG_URL + "` (dossier `img/` à y déployer), "
+        "polices : dossier `fonts/` (à installer dans `styles/fonts` de GeoServer).",
+        "",
+    ]
     for title, items in NOTES.items():
         lines += [f"## {title} ({len(items)})", ""]
         lines += [f"- {i}" for i in items] or ["- aucune"]
         lines.append("")
-    write(OUT / "DIFFERENCES.md", "\n".join(lines))
+    write(SLDS_DIR / "DIFFERENCES.md", "\n".join(lines))
 
 
 def validate():
@@ -385,12 +454,12 @@ def validate():
         print(f"   ⚠ validation impossible : GeoServer injoignable ({GEOSERVER_URL})")
         return
     errors = 0
-    files = sorted(OUT.rglob("*.sld"))
+    files = sorted(SLDS_DIR.rglob("*.sld"))
     for i, f in enumerate(files):
         code, body = geoserver.add_style(ws, f"s{i}", f.read_bytes())
         if not geoserver.ok(code):
             errors += 1
-            print(f"   ⚠ {f.relative_to(OUT)} : {code} {body[:200]!r}")
+            print(f"   ⚠ {f.relative_to(SLDS_DIR)} : {code} {body[:200]!r}")
     geoserver.delete_workspace(ws)
     print(f"✅ validation GeoServer : {len(files) - errors}/{len(files)} SLD acceptés")
 
@@ -399,7 +468,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--validate", action="store_true", help="publication d'essai sur le GeoServer local")
     args = ap.parse_args()
-    shutil.rmtree(OUT, ignore_errors=True)
+    shutil.rmtree(SLDS_DIR, ignore_errors=True)
     index, styles, sup_rules = load()
     build_du(index, styles)
     build_sup(index, styles, sup_rules)
@@ -407,9 +476,11 @@ def main():
         NOTES["Couches reprises de la production"].append(f"sup/*/{name}.sld (fragments STYLES/data/sup)")
     copy_resources()
     write_differences()
-    n = {d: len(list((OUT / d).rglob("*.sld"))) for d in ("classiques", "symboles")}
-    print(f"✅ {OUT.relative_to(ROOT)} : {n['classiques']} SLD classiques, {n['symboles']} SLD par symbole, "
-          f"{len(USED_IMAGES)} images ; écarts → DIFFERENCES.md")
+    n = {d: len(list((SLDS_DIR / d).rglob("*.sld"))) for d in ("classiques", "symboles")}
+    print(
+        f"✅ {SLDS_DIR.relative_to(ROOT)} : {n['classiques']} SLD classiques, {n['symboles']} SLD par symbole, "
+        f"{len(USED_IMAGES)} images ; écarts → DIFFERENCES.md"
+    )
     if args.validate:
         validate()
 

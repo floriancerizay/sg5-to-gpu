@@ -4,9 +4,9 @@
 (bin/qml2sld.py), puis complété par pattern_tiles (tuiles de trame, pictos de ligne) et par les étiquettes
 des couches ArcGIS (.lyrx).
 
-Codes absents des QML (sous-codes) : symbole du code QML dont le fichier SLD CNIG est identique, sinon
-celui d'un code QML présenté sur la même fiche du catalogue ; à défaut, aucun style (signalé). Les fichiers
-SLD par code du dépôt CNIG ne servent qu'à cette comparaison.
+Codes absents des QML (sous-codes) : symbole du code QML dont le fichier SLD CNIG est identique, sinon celui
+du code principal du type ; à défaut, aucun style (signalé). Les fichiers SLD par code du dépôt CNIG ne servent
+qu'à cette comparaison. Les catalogues PDF ne sont pas utilisés ici (seulement pour la planche).
 
 Sorties :
   data/symbols/script/<domaine>/<code>.sld   une règle par code (Name = code, Title = libellé, filtre
@@ -17,7 +17,9 @@ Sorties :
   data/svg/                                  images (SVG CNIG, PSMV préfixées psmv_ ; tuiles pat_, rot_)
   data/fonts/                                polices des symboles et des étiquettes
 """
+
 import copy
+import functools
 import hashlib
 import json
 import re
@@ -31,16 +33,26 @@ from fontTools.ttLib import TTFont
 from lxml import etree
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import (CNIG_DIR, CNIG_INDEX, FONTS_DIR, GEOMETRY_NAME, PROD_IMG_DIR, REPORT_DIR, ROOT, SCRIPT_DIR,
-                    SVG_DIR, SYMBOLS_DIR, read_json, write_json)
-import sld_normalize as N
+import sld
 from cnig_index import qml_symbols
+from config import (
+    CNIG_DIR,
+    CNIG_INDEX,
+    FONTS_DIR,
+    GEOMETRY_NAME,
+    PROD_IMG_DIR,
+    ROOT,
+    SCRIPT_DIR,
+    SVG_DIR,
+    SYMBOLS_DIR,
+    read_json,
+    write_json,
+)
 from pattern_tiles import stroke_graphics, synthesize
 from qml2sld import Converter, ogc_conditions, props, qml_color, rule_filter
 
 QML_DOMAINS = {"PLU": "plu", "PSMV": "psmv", "SUP": "sup"}
 LYRX_DOMAINS = {"PLU": "plu", "PSMV": "psmv"}  # seules couches ArcGIS qui définissent des étiquettes
-PLATES = REPORT_DIR / "cnig/plates.json"  # vignettes du catalogue (bin/cnig_plates.py)
 # substituts libres des polices d'étiquette absentes (même dessin ou mêmes métriques)
 FONT_SUBSTITUTES = {"Century Gothic": "URW Gothic", "Times New Roman": "Liberation Serif", "Arial": "Liberation Sans"}
 DPI = 90.714  # 0,28 mm/px
@@ -52,6 +64,7 @@ def key_of(e):
 
 # --- Étiquettes des couches ArcGIS (.lyrx) -----------------------------------------------------
 
+
 def _cim_color(sym):
     """Couleur #rrggbb de la 1re couche d'un symbole CIM ArcGIS, ou None."""
     layers = (sym or {}).get("symbolLayers") or [{}]
@@ -59,11 +72,12 @@ def _cim_color(sym):
     values = color.get("values") or []
     if color.get("type") != "CIMRGBColor" or len(values) < 3:
         return None
-    return "#%02x%02x%02x" % tuple(int(v) for v in values[:3])
+    r, g, b = (int(v) for v in values[:3])
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def _sld(parent, tag, text=None, **attrs):
-    el = etree.SubElement(parent, f"{{{N.NS_SLD}}}{tag}", **attrs)
+def _sub_element(parent, tag, text=None, **attrs):
+    el = etree.SubElement(parent, f"{{{sld.NS_SLD}}}{tag}", **attrs)
     if text is not None:
         el.text = text
     return el
@@ -71,31 +85,31 @@ def _sld(parent, tag, text=None, **attrs):
 
 def text_symbolizer(text_symbol, attr):
     """TextSymbolizer d'une classe d'étiquettes ArcGIS (CIMTextSymbol) dont le texte est l'attribut `attr`."""
-    sym = etree.Element(f"{{{N.NS_SLD}}}TextSymbolizer")
-    etree.SubElement(_sld(sym, "Label"), f"{{{N.NS_OGC}}}PropertyName").text = attr
+    sym = etree.Element(f"{{{sld.NS_SLD}}}TextSymbolizer")
+    etree.SubElement(_sub_element(sym, "Label"), f"{{{sld.NS_OGC}}}PropertyName").text = attr
 
-    font = _sld(sym, "Font")
-    _sld(font, "CssParameter", text_symbol.get("fontFamilyName") or "Arial", name="font-family")
-    _sld(font, "CssParameter", f"{float(text_symbol.get('height') or 10) * DPI / 72:.1f}", name="font-size")
+    font = _sub_element(sym, "Font")
+    _sub_element(font, "CssParameter", text_symbol.get("fontFamilyName") or "Arial", name="font-family")
+    _sub_element(font, "CssParameter", f"{float(text_symbol.get('height') or 10) * DPI / 72:.1f}", name="font-size")
     style = (text_symbol.get("fontStyleName") or "").lower()
     if "bold" in style:
-        _sld(font, "CssParameter", "bold", name="font-weight")
+        _sub_element(font, "CssParameter", "bold", name="font-weight")
     if "italic" in style:
-        _sld(font, "CssParameter", "italic", name="font-style")
+        _sub_element(font, "CssParameter", "italic", name="font-style")
 
-    anchor = _sld(_sld(_sld(sym, "LabelPlacement"), "PointPlacement"), "AnchorPoint")
-    _sld(anchor, "AnchorPointX", "0.5")
-    _sld(anchor, "AnchorPointY", "0.5")
+    anchor = _sub_element(_sub_element(_sub_element(sym, "LabelPlacement"), "PointPlacement"), "AnchorPoint")
+    _sub_element(anchor, "AnchorPointX", "0.5")
+    _sub_element(anchor, "AnchorPointY", "0.5")
 
     halo, fill = _cim_color(text_symbol.get("haloSymbol")), _cim_color(text_symbol.get("symbol"))
     if halo and text_symbol.get("haloSize"):
-        h = _sld(sym, "Halo")
-        _sld(h, "Radius", f"{float(text_symbol['haloSize']) * DPI / 72:.1f}")
-        _sld(_sld(h, "Fill"), "CssParameter", halo, name="fill")
+        h = _sub_element(sym, "Halo")
+        _sub_element(h, "Radius", f"{float(text_symbol['haloSize']) * DPI / 72:.1f}")
+        _sub_element(_sub_element(h, "Fill"), "CssParameter", halo, name="fill")
     if fill:
-        _sld(_sld(sym, "Fill"), "CssParameter", fill, name="fill")
-    _sld(sym, "VendorOption", "false", name="conflictResolution")
-    _sld(sym, "VendorOption", "true", name="partials")
+        _sub_element(_sub_element(sym, "Fill"), "CssParameter", fill, name="fill")
+    _sub_element(sym, "VendorOption", "false", name="conflictResolution")
+    _sub_element(sym, "VendorOption", "true", name="partials")
     return sym
 
 
@@ -125,8 +139,12 @@ def lyrx_labels(index):
                     value = where.group(2)
                     entries = by_domain.get(domain, [])
                     targets = [e for e in entries if e["code"] == value] or [
-                        e for e in entries if value in e["attrs"].values()
-                        and e["code"].startswith("ZONE_") == ("zone" in lyrx.stem) and e["code"].endswith(scale)]
+                        e
+                        for e in entries
+                        if value in e["attrs"].values()
+                        and e["code"].startswith("ZONE_") == ("zone" in lyrx.stem)
+                        and e["code"].endswith(scale)
+                    ]
                     expr = (label_class.get("expression") or "").strip()
                     field = re.match(r"^\$feature\.(\w+)$", expr)
                     constant = re.match(r'^"([^"]*)"$', expr)
@@ -143,6 +161,7 @@ def lyrx_labels(index):
     return labels, skipped
 
 
+@functools.cache
 def _font_files(family):
     """Fichiers d'une famille de polices : polices de production (gpu-entrepot STYLES/data/fonts),
     sinon polices système (fontconfig)."""
@@ -171,9 +190,11 @@ def resolve_font(family):
         for f in files:
             shutil.copyfile(f, FONTS_DIR / f.name)
         if substitute:
-            return candidate, (f"⚠ police d'étiquette {family} absente (STYLES/data/fonts de gpu-entrepot, système) : "
-                               f"remplacée par {candidate} ; déposer le fichier de police dans STYLES/data/fonts de "
-                               f"gpu-entrepot pour l'utiliser")
+            return candidate, (
+                f"⚠ police d'étiquette {family} absente (STYLES/data/fonts de gpu-entrepot, système) : "
+                f"remplacée par {candidate} ; déposer le fichier de police dans STYLES/data/fonts de "
+                f"gpu-entrepot pour l'utiliser"
+            )
         return candidate, None
     return family, f"⚠ police d'étiquette {family} absente : GeoServer utilisera une police de substitution"
 
@@ -191,34 +212,45 @@ def zone_color(symbol):
 def fit_label(label, symbol, key, notes):
     """Étiquette d'un code : police résolue ; halo d'une zone aligné sur la couleur de la zone quand le .lyrx
     diverge (AUc : halo noir dans le .lyrx, rouge dans le catalogue comme pour les autres zones)."""
-    font = label.find(f".//{{{N.NS_SLD}}}CssParameter[@name='font-family']")
+    font = label.find(f".//{{{sld.NS_SLD}}}CssParameter[@name='font-family']")
     if font is not None:
         font.text, note = resolve_font(font.text)
         if note:
             notes.append(note)
-    halo = label.find(f"{{{N.NS_SLD}}}Halo/{{{N.NS_SLD}}}Fill/{{{N.NS_SLD}}}CssParameter")
+    halo = label.find(f"{{{sld.NS_SLD}}}Halo/{{{sld.NS_SLD}}}Fill/{{{sld.NS_SLD}}}CssParameter")
     color = zone_color(symbol) if key.split(":")[1].startswith("ZONE_") else None
     if halo is not None and color and halo.text.lower() != color:
-        notes.append(f"⚠ halo de l'étiquette du .lyrx ({halo.text}) différent de la couleur de la zone ({color}, "
-                     f"comme dans le catalogue) : couleur de la zone retenue")
+        notes.append(
+            f"⚠ halo de l'étiquette du .lyrx ({halo.text}) différent de la couleur de la zone ({color}, "
+            f"comme dans le catalogue) : couleur de la zone retenue"
+        )
         halo.text = color
     return label
 
 
 # --- Conversion des QML ------------------------------------------------------------------------
 
+SUBCODE_RE = re.compile(r"^(.+_\d{2})-(\d{2})(_\d{3}.*)$")  # PSC-P_15-01_001 : type 15, sous-type 01, variante 001
+
+
 def base_code(code):
     """Code de base d'un sous-code : PSC-P_15-01_001 → PSC-P_15-00_001 (None si déjà un code de base)."""
-    m = re.match(r"^(.+_\d{2})-(\d{2})(_\d{3}.*)$", code)
+    m = SUBCODE_RE.match(code)
     return f"{m.group(1)}-00{m.group(3)}" if m and m.group(2) != "00" else None
+
+
+def same_type(code):
+    """Clé (préfixe et type, variante) d'un code PSC / INF : PSC-P_15-01_001 → ("PSC-P_15", "_001")."""
+    m = SUBCODE_RE.match(code)
+    return (m.group(1), m.group(3)) if m else None
 
 
 def write_symbol(entry, syms, source):
     """SLD d'un code → entrée de data/symbols/script/index.json."""
     path = SCRIPT_DIR / entry["domain"] / f"{entry['code'].replace('|', '__')}.sld"
     path.parent.mkdir(parents=True, exist_ok=True)
-    rule = N.rule_xml(entry["code"], entry.get("label"), [("symbole", entry["code"])], syms)
-    path.write_text(N.sld_document(entry["code"], [rule]), encoding="utf-8")
+    rule = sld.rule_xml(entry["code"], entry.get("label"), [("symbole", entry["code"])], syms)
+    path.write_text(sld.sld_document(entry["code"], [rule]), encoding="utf-8")
     return {"file": str(path.relative_to(SCRIPT_DIR)), "source": source}
 
 
@@ -250,8 +282,9 @@ def convert(index, labels):
                 syms = converter.symbolizers(symbol, notes, pitches)
                 syms, n_tiles = synthesize(syms, SVG_DIR)
                 stats["tuiles"] += n_tiles
-                stats["pictos de ligne"] += stroke_graphics(syms, SVG_DIR, symbol.get("type") == "fill", pitches,
-                                                            GEOMETRY_NAME)
+                stats["pictos de ligne"] += stroke_graphics(
+                    syms, SVG_DIR, symbol.get("type") == "fill", pitches, GEOMETRY_NAME
+                )
                 if is_rule:
                     rule = sup_rule(name, info, syms, notes, len(sup_rules))
                     if rule:
@@ -282,30 +315,41 @@ def sup_rule(name, info, syms, notes, number):
     suptype, attrs = parsed
     path = SCRIPT_DIR / "sup_rules" / f"{number:03d}.sld"
     path.parent.mkdir(parents=True, exist_ok=True)
-    rule = N.rule_xml(name, name, ogc_conditions(suptype, attrs), syms, max_scale=info.get("scalemaxdenom"))
-    path.write_text(N.sld_document(name, [rule]), encoding="utf-8")
-    return {"label": name, "suptype": suptype, "attrs": attrs, "notes": notes,
-            "max_scale": info.get("scalemaxdenom"), "file": str(path.relative_to(SCRIPT_DIR))}
+    rule = sld.rule_xml(name, name, ogc_conditions(suptype, attrs), syms, max_scale=info.get("scalemaxdenom"))
+    path.write_text(sld.sld_document(name, [rule]), encoding="utf-8")
+    return {
+        "label": name,
+        "suptype": suptype,
+        "attrs": attrs,
+        "notes": notes,
+        "max_scale": info.get("scalemaxdenom"),
+        "file": str(path.relative_to(SCRIPT_DIR)),
+    }
 
 
 def sld_signature(path):
     """Empreinte des symboliseurs d'un fichier SLD CNIG (comparaison de sous-codes uniquement)."""
-    root = N.parse(path)
-    return N.body_hash([N.normalize_symbolizer(s, href_prefix="") for r in N.rules(root) for s in N.symbolizers(r)])
+    root = sld.parse(path)
+    return sld.body_hash(
+        [sld.normalize_symbolizer(s, href_prefix="") for r in sld.rules(root) for s in sld.symbolizers(r)]
+    )
 
 
 def attach_subcodes(entries, result):
     """Codes absents des QML, dans l'ordre :
     1. symbole du code QML dont le fichier SLD CNIG est identique ;
-    2. symbole d'un code QML présenté sur la même fiche du catalogue (même couche, même variante) : le code de
-       base tt-00 de préférence (« 15-00 à 98_001 »), sinon le premier de la fiche (« 19-01 à 02_001 ») ;
-    3. symbole du code principal : tt-00 de même couche et même variante (PSC-L_15-01 → PSC-L_15-00) ; en SUP,
-       un code de la même servitude, de même terminaison d'assiette si possible."""
+    2. symbole du code principal : tt-00 de même géométrie et même variante (PSC-L_15-01 → PSC-L_15-00), sinon
+       le premier code QML du type (PSMV INF-S_19-02 → INF-S_19-01, pas de 19-00) ; en SUP, un code de la même
+       servitude, de même terminaison d'assiette si possible."""
+
     def copy_from(key, ref_key, **flags):
         ref = result[ref_key]
-        syms = N.symbolizers(N.rules(N.parse(SCRIPT_DIR / ref["file"]))[0])
-        result[key] = {**write_symbol(entries[key], syms, f"= {ref_key.split(':', 1)[1]}"),
-                       "notes": ref.get("notes", []), **flags}
+        syms = sld.symbolizers(sld.rules(sld.parse(SCRIPT_DIR / ref["file"]))[0])
+        result[key] = {
+            **write_symbol(entries[key], syms, f"= {ref_key.split(':', 1)[1]}"),
+            "notes": ref.get("notes", []),
+            **flags,
+        }
 
     # 1. fichier SLD CNIG identique
     signature = {k: sld_signature(CNIG_DIR / e["sld"]) for k, e in entries.items() if e.get("sld")}
@@ -317,23 +361,7 @@ def attach_subcodes(entries, result):
         if key not in result and (e["domain"], signature.get(key)) in by_signature:
             copy_from(key, by_signature[(e["domain"], signature[key])])
 
-    # 2. même fiche du catalogue
-    plates = read_json(PLATES, {})
-    on_plate = {}
-    for k in sorted(result):
-        if not result[k]["source"].startswith("=") and k in entries and plates.get(k):
-            e = entries[k]
-            on_plate.setdefault((plates[k], e["domain"], e["layer"], e["code"][-4:]), []).append(k)
-    for key, e in entries.items():
-        if key in result or not plates.get(key):
-            continue
-        candidates = on_plate.get((plates[key], e["domain"], e["layer"], e["code"][-4:]), [])
-        base = f"{e['domain']}:{base_code(e['code'])}"
-        ref_key = base if base in candidates else (candidates[0] if candidates else None)
-        if ref_key:
-            copy_from(key, ref_key, same_plate=True)
-
-    # 3. code principal
+    # 2. code principal
     direct = sorted(k for k in result if not result[k]["source"].startswith("="))
     for key, e in entries.items():
         if key in result:
@@ -341,16 +369,27 @@ def attach_subcodes(entries, result):
         if e["domain"] == "sup":
             head, _, tail = e["code"].partition("|")
             same = [k for k in direct if k.startswith(f"sup:{head}|")]
-            ref_key = next((k for k in same if k.rsplit("|", 1)[-1] == tail.rsplit("|", 1)[-1]),
-                           same[0] if same else None)
+            ref_key = next(
+                (k for k in same if k.rsplit("|", 1)[-1] == tail.rsplit("|", 1)[-1]), same[0] if same else None
+            )
         else:
             base = f"{e['domain']}:{base_code(e['code'])}"
-            ref_key = base if base in result else None
+            kind = same_type(e["code"])
+            first = next(
+                (
+                    k
+                    for k in direct
+                    if kind and k.startswith(f"{e['domain']}:") and same_type(k.split(":", 1)[1]) == kind
+                ),
+                None,
+            )
+            ref_key = base if base in result else first
         if ref_key:
             copy_from(key, ref_key, main_code=True)
 
 
 # --- Images, polices et diagnostics ------------------------------------------------------------
+
 
 def svg_dimensions():
     """width / height (repris du viewBox) ajoutés aux SVG qui n'en ont pas : GeoServer n'affiche pas
@@ -366,13 +405,9 @@ def svg_dimensions():
         if len(parts) != 4:
             continue
         tag = f'<svg width="{parts[2]}" height="{parts[3]}"' + m.group(0)[4:]
-        f.write_text(text[:m.start()] + tag + text[m.end():], encoding="utf-8")
+        f.write_text(text[: m.start()] + tag + text[m.end() :], encoding="utf-8")
         n += 1
     return n
-
-
-def _sha1(path):
-    return hashlib.sha1(path.read_bytes()).hexdigest()
 
 
 def origin_issues(e, entry):
@@ -381,17 +416,15 @@ def origin_issues(e, entry):
     source = entry["source"] if entry else ""
     ref = source[2:]
     if entry is None and e.get("sld"):
-        out.append(f"⚠ absent des QML CNIG (symbole par défaut sous QGIS), sans code QML équivalent ni fiche "
-                   f"partagée : aucun style produit (son fichier {e['sld']} n'est pas utilisé)")
+        out.append(
+            f"⚠ absent des QML CNIG (symbole par défaut sous QGIS), sans code QML équivalent ni code "
+            f"principal : aucun style produit (son fichier {e['sld']} n'est pas utilisé)"
+        )
     elif entry is None:
         out.append("⚠ aucun style CNIG (ni QML, ni fichier SLD par code)")
     elif source.startswith("= ") and entry.get("main_code"):
-        out.append(f"⚠ absent des QML CNIG (symbole par défaut sous QGIS), sans code QML équivalent ni fiche "
-                   f"partagée : style du code principal {ref}")
-    elif source.startswith("= ") and entry.get("same_plate"):
-        own = f"son fichier {e['sld']} diffère de celui de {ref}" if e.get("sld") else "pas de fichier SLD propre"
-        out.append(f"⚠ absent des QML CNIG (symbole par défaut sous QGIS) ; {own} ; même fiche du catalogue "
-                   f"que {ref} : style de {ref} utilisé")
+        own = f" ; son fichier {e['sld']} diffère de celui de {ref}" if e.get("sld") else ""
+        out.append(f"⚠ absent des QML CNIG (symbole par défaut sous QGIS){own} : style du code principal {ref}")
     elif source.startswith("= "):
         out.append(f"ℹ absent des QML CNIG (symbole par défaut sous QGIS) : style de {ref} (fichier SLD identique)")
     if not e.get("sld") and e["domain"] != "sup":
@@ -399,7 +432,7 @@ def origin_issues(e, entry):
     return out
 
 
-def style_issues(key, entry, prod_svgs, labels, skipped):
+def style_issues(key, entry, labels, skipped):
     """Diagnostics sur le style produit : pictogrammes, étiquettes, marques de police."""
     out = list(entry.get("notes", []))
     text = (SCRIPT_DIR / entry["file"]).read_text(encoding="utf-8")
@@ -411,13 +444,13 @@ def style_issues(key, entry, prod_svgs, labels, skipped):
             continue
         if name.startswith("qml_"):
             out.append(f"ℹ pictogramme du QML absent des SVG CNIG ({name})")
-        if name in prod_svgs and prod_svgs[name] != _sha1(SVG_DIR / name):
-            out.append(f"⚠ pictogramme {name} : homonyme différent dans les styles de production")
     if key in labels:
         out.append("ℹ étiquette reprise de la couche ArcGIS (.lyrx), absente du QML et du SLD CNIG")
     if key in skipped:
-        out.append(f"ℹ étiquette « {skipped[key]} » du .lyrx non reprise (texte constant, absent du QML "
-                   f"et de la vignette du catalogue)")
+        out.append(
+            f"ℹ étiquette « {skipped[key]} » du .lyrx non reprise (texte constant, absent du QML "
+            f"et de la vignette du catalogue)"
+        )
     for font, char in sorted(set(re.findall(r"ttf://([^#<]+)#(0x[0-9A-Fa-f]+)", text))):
         out.append(f"ℹ marque de police {font} {char} : rendu dépendant des polices de GeoServer")
     return out
@@ -425,14 +458,13 @@ def style_issues(key, entry, prod_svgs, labels, skipped):
 
 def build_issues(index, result, labels, skipped):
     """Problèmes du symbole d'origine, par code : « ⚠ » non reproductible / défaut, « ℹ » information."""
-    prod_svgs = {f.name: _sha1(f) for f in PROD_IMG_DIR.glob("*.svg")}
     issues = {}
     for e in index["entries"]:
         key = key_of(e)
         entry = result.get(key)
         found = origin_issues(e, entry)
         if entry:
-            found += style_issues(key, entry, prod_svgs, labels, skipped)
+            found += style_issues(key, entry, labels, skipped)
         if found:
             issues[key] = list(dict.fromkeys(found))
     return issues
@@ -461,18 +493,24 @@ def main():
     print(f"   étiquettes ArcGIS (lyrx) : {len(labels)} codes")
     result, sup_rules = convert(index, labels)
     direct = sum(1 for v in result.values() if not v["source"].startswith("="))
-    print(f"✅ {len(result)} symboles ({direct} QML, {len(result) - direct} sous-codes rattachés), "
-          f"{len(sup_rules)} règles ASSIETTE_SUP_S → {SCRIPT_DIR.relative_to(ROOT)}")
+    print(
+        f"✅ {len(result)} symboles ({direct} QML, {len(result) - direct} sous-codes rattachés), "
+        f"{len(sup_rules)} règles ASSIETTE_SUP_S → {SCRIPT_DIR.relative_to(ROOT)}"
+    )
 
     n = svg_dimensions()
-    print(f"   {len(list(SVG_DIR.glob('*.svg')))} images dans {SVG_DIR.relative_to(ROOT)} "
-          f"({n} SVG complétés de width/height)")
+    print(
+        f"   {len(list(SVG_DIR.glob('*.svg')))} images dans {SVG_DIR.relative_to(ROOT)} "
+        f"({n} SVG complétés de width/height)"
+    )
 
     issues = build_issues(index, result, labels, skipped)
     write_json(SYMBOLS_DIR / "issues.json", issues)
     warn = sum(1 for v in issues.values() if any(i.startswith("⚠") for i in v))
-    print(f"✅ diagnostics : {len(issues)} codes signalés dont {warn} avec « ⚠ » → "
-          f"{(SYMBOLS_DIR / 'issues.json').relative_to(ROOT)}")
+    print(
+        f"✅ diagnostics : {len(issues)} codes signalés dont {warn} avec « ⚠ » → "
+        f"{(SYMBOLS_DIR / 'issues.json').relative_to(ROOT)}"
+    )
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ et écrit une image par couche, avec la même emprise et la même résolution qu
 Lancé par bin/compare.py avec l'interpréteur PyQGIS (QGIS_PYTHON) : render_qgis.py <jobs.json>
 jobs.json : [{"gpkg", "layer", "qmls": [...], "bbox": [xmin, ymin, xmax, ymax], "size": [w, h], "out", "fonts"}]
 """
+
 import json
 import os
 import sys
@@ -13,12 +14,16 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from qgis.core import (  # noqa: E402
-    QgsApplication, QgsCoordinateReferenceSystem, QgsMapRendererCustomPainterJob, QgsMapSettings,
-    QgsRectangle, QgsVectorLayer,
+from qgis.core import (
+    QgsApplication,
+    QgsCoordinateReferenceSystem,
+    QgsMapRendererCustomPainterJob,
+    QgsMapSettings,
+    QgsRectangle,
+    QgsVectorLayer,
 )
-from qgis.PyQt.QtCore import QSize, Qt  # noqa: E402
-from qgis.PyQt.QtGui import QColor, QFontDatabase, QImage, QPainter  # noqa: E402
+from qgis.PyQt.QtCore import QSize, Qt
+from qgis.PyQt.QtGui import QColor, QFontDatabase, QImage, QPainter
 
 
 def load_fonts(dirs):

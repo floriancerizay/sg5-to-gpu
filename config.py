@@ -3,6 +3,7 @@
 Les réglages peuvent être surchargés par une variable d'environnement ou par le fichier .env
 (voir .env.example) ; une variable déjà exportée prime sur .env.
 """
+
 import json
 import os
 import subprocess
@@ -25,15 +26,15 @@ def _load_env(path):
 _load_env(ROOT / ".env")
 
 # --- Sorties ---
-DATA_DIR = ROOT / "data"                     # sorties intermédiaires, non versionnées
-CNIG_INDEX = DATA_DIR / "cnig_index.json"    # 1. index des codes CNIG
-SVG_DIR = DATA_DIR / "svg"                   # 3. pictogrammes et tuiles
-FONTS_DIR = DATA_DIR / "fonts"               # 3. polices des symboles et des étiquettes
-SYMBOLS_DIR = DATA_DIR / "symbols"           # 3. diagnostics, 5. écarts au rendu QGIS
-SCRIPT_DIR = SYMBOLS_DIR / "script"          # 3. un SLD par code
-SLDS_DIR = DATA_DIR / "slds"                 # 4. SLD par couche GPU (livrable)
-GPKG = DATA_DIR / "layer/compare.gpkg"       # 5. grille de test
-REPORT_DIR = ROOT / "report"                 # 2. vignettes, 5. planche : versionnée, publiée sur GitHub Pages
+DATA_DIR = ROOT / "data"  # sorties intermédiaires, non versionnées
+CNIG_INDEX = DATA_DIR / "cnig_index.json"  # 1. index des codes CNIG
+SVG_DIR = DATA_DIR / "svg"  # 3. pictogrammes et tuiles
+FONTS_DIR = DATA_DIR / "fonts"  # 3. polices des symboles et des étiquettes
+SYMBOLS_DIR = DATA_DIR / "symbols"  # 3. diagnostics, 5. écarts au rendu QGIS
+SCRIPT_DIR = SYMBOLS_DIR / "script"  # 3. un SLD par code
+SLDS_DIR = DATA_DIR / "slds"  # 4. SLD par couche GPU (livrable)
+GPKG = DATA_DIR / "layer/compare.gpkg"  # 5. grille de test
+REPORT_DIR = ROOT / "report"  # 2. vignettes, 5. planche : versionnée, publiée sur GitHub Pages
 
 # --- GeoServer local de la planche ---
 GEOSERVER_URL = os.getenv("GEOSERVER_URL", "http://localhost:8080/geoserver")

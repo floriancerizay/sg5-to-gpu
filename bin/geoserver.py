@@ -1,4 +1,5 @@
 """Appels au GeoServer local (API REST et WMS), paramétrés par config.GEOSERVER_*."""
+
 import json
 import urllib.error
 import urllib.parse
@@ -48,17 +49,28 @@ def add_style(workspace, name, sld):
 
 def add_geopackage(workspace, store, path):
     """Publie toutes les couches d'un GeoPackage dans un entrepôt du workspace → (code HTTP, corps)."""
-    return rest(f"workspaces/{workspace}/datastores/{store}/file.gpkg?configure=all", "PUT",
-                path.read_bytes(), "application/geopackage")
+    return rest(
+        f"workspaces/{workspace}/datastores/{store}/file.gpkg?configure=all",
+        "PUT",
+        path.read_bytes(),
+        "application/geopackage",
+    )
 
 
 def getmap(workspace, layer, style, bbox, size):
     """Image PNG d'une couche (EPSG:2154, fond blanc) → (octets, None) ou (None, message d'erreur)."""
     params = {
-        "service": "WMS", "version": "1.1.1", "request": "GetMap",
-        "layers": f"{workspace}:{layer}", "styles": f"{workspace}:{style}",
-        "srs": "EPSG:2154", "bbox": ",".join(map(str, bbox)), "width": size[0], "height": size[1],
-        "format": "image/png", "bgcolor": "0xFFFFFF",
+        "service": "WMS",
+        "version": "1.1.1",
+        "request": "GetMap",
+        "layers": f"{workspace}:{layer}",
+        "styles": f"{workspace}:{style}",
+        "srs": "EPSG:2154",
+        "bbox": ",".join(map(str, bbox)),
+        "width": size[0],
+        "height": size[1],
+        "format": "image/png",
+        "bgcolor": "0xFFFFFF",
     }
     url = f"{BASE_URL}/{workspace}/wms?" + urllib.parse.urlencode(params)
     with urllib.request.urlopen(url, timeout=300) as r:

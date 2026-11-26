@@ -1,0 +1,16 @@
+[project]
+name = "sg5-to-gpu"
+description = "Styles GeoServer (SLD) du Géoportail de l'Urbanisme à partir des symboles CNIG DDU-SG5-SYMBOLISATION"
+requires-python = ">=3.10"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "C4", "PIE", "RET", "PERF", "RUF", "N"]
+# Typographie française (’ « » × …) voulue dans les textes et les commentaires
+ignore = ["RUF001", "RUF002", "RUF003", "PERF203"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["config", "geoserver", "sld", "qml2sld", "pattern_tiles", "cnig_index"]
