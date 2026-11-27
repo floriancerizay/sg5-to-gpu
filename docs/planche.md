@@ -16,7 +16,7 @@ Rastérise les catalogues PDF, repère chaque fiche par son texte et découpe la
 
 ## Diagnostics
 
-Écrits par `convert_symbols.py` dans `data/symbols/issues.json`, affichés dans la colonne « problèmes du symbole d’origine » : « ⚠ » défaut ou partie non reproductible, « ℹ » information. Sous chaque problème, une recommandation (`RECOMMENDATIONS` dans `compare.py`) indique quoi corriger, le plus souvent dans le dépôt CNIG.
+Écrits par `convert_symbols.py` dans `data/symbols/issues.json`, affichés dans la colonne « problèmes du symbole d’origine » : « ⚠ » défaut ou partie non reproductible, « ℹ » information. Sous chaque problème, une recommandation (`RECOMMENDATIONS` dans `compare.py`) indique quoi corriger, le plus souvent dans le dépôt CNIG. L’icône de fichier à côté du message affiche, au survol, les fichiers attendus ou en cause (chemins du dépôt CNIG, sauf `data/…` produits par sg5-to-gpu) : QML où la catégorie du code est attendue, SLD par code, `.lyrx`, catalogue PDF et fiche attendue, `__Ressources/` pour une police… Format de `issues.json` : `{"domaine:code": [{"text": message, "files": [[chemin, rôle], …]}]}`.
 
 | Thème | Messages |
 |-------|----------|

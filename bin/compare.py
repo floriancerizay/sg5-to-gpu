@@ -606,25 +606,72 @@ def filter_options(counts, total):
     return "".join(f'<option value="{key}">{html.escape(label)}</option>' for key, label in options)
 
 
-def problems(key, scores, issues):
-    """Problèmes d'un code : diagnostics de convert_symbols + écart au rendu QGIS."""
-    out = list(issues.get(key, []))
+def problems(key, scores, issues, script):
+    """Problèmes d'un code : diagnostics de convert_symbols + écart au rendu QGIS → [{text, files}]."""
+    out = [i if isinstance(i, dict) else {"text": i, "files": []} for i in issues.get(key, [])]
     d = scores.get(key)
     if d is not None and d > DEVIATION:
-        out.append(f"⚠ écart au rendu QGIS : {d:.1f}")
+        entry = script.get(key, {})
+        files = [[entry["source"], "symbole QGIS (rendu de référence)"]] if entry.get("source") else []
+        if entry.get("file"):
+            files.append([f"data/symbols/script/{entry['file']}", "SLD produit (sg5-to-gpu)"])
+        out.append({"text": f"⚠ écart au rendu QGIS : {d:.1f}", "files": files})
     return out
 
 
+def no_plate(entries):
+    """Remarque « pas de vignette » d'une fiche : catalogue PDF et fiche attendus."""
+    e = entries[0]
+    folder = e["domain"].upper()
+    if e["domain"] == "sup":
+        label = e["code"]
+    elif e["layer"] == "zone_urba":
+        label = e["attrs"].get("typezone") or e["code"]
+    else:
+        label = e.get("etiquette") or e["code"]
+    return {
+        "text": "ℹ pas de vignette dans le catalogue CNIG",
+        "files": [
+            [
+                f"{folder}/Catalogue_Symbolisation_CNIG_{folder}.pdf",
+                f"fiche « {label} » attendue (ou plage de fiche qui la couvre)",
+            ]
+        ],
+    }
+
+
+FILES_ICON = (
+    '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4 1.5h5l3 3v10H4z M9 1.5v3h3" '
+    'fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>'
+)
+
+
+def _files_html(files):
+    """Infobulle des fichiers attendus ou en cause d'un problème (chemins du dépôt CNIG, sauf data/…)."""
+    if not files:
+        return ""
+    rows = "".join(
+        f"<span><code>{html.escape(path)}</code>{f' — {html.escape(role)}' if role else ''}</span>"
+        for path, role in files
+    )
+    return (
+        f'<span class="files" tabindex="0" aria-label="fichiers concernés">{FILES_ICON}'
+        f'<span class="tip" role="tooltip">{rows}</span></span>'
+    )
+
+
 def _problem_html(items, geometry=""):
-    """Éléments de liste des remarques : pastille « ⚠ » / « ℹ », préfixe de géométrie, texte, recommandation."""
+    """Éléments de liste des remarques : pastille « ⚠ » / « ℹ », préfixe de géométrie, texte, fichiers en
+    infobulle, recommandation."""
     out = []
     for item in items:
-        icon, _, text = item.partition(" ")
+        icon, _, text = item["text"].partition(" ")
         css = "w" if icon == "⚠" else "i"
-        advice = recommendation(item)
+        advice = recommendation(item["text"])
         advice = f'<div class="reco">{html.escape(advice)}</div>' if advice else ""
         out.append(
-            f'<li class="{css}"><span class="ico">{icon}</span><div>{geometry}{html.escape(text)}{advice}</div></li>'
+            f'<li class="{css}"><span class="ico">{icon}</span><div>{geometry}{html.escape(text)}'
+            f"{_files_html(item.get('files'))}{advice}</div></li>"
         )
     return "".join(out)
 
@@ -636,7 +683,7 @@ def plate(name):
     return f'<td class="render"><div class="plate"><img src="cnig/{html.escape(name)}" alt=""></div></td>'
 
 
-def sheet_row(name, sec, group, images, plates, scores, issues):
+def sheet_row(name, sec, group, images, plates, scores, issues, context):
     """Ligne HTML d'une fiche → (html, remarques « ⚠ » / « ℹ » de la fiche)."""
     entries = [(layer, group["codes"][layer]) for layer in sec["layers"] if layer in group["codes"]]
     first = entries[0][1]
@@ -649,16 +696,17 @@ def sheet_row(name, sec, group, images, plates, scores, issues):
     keys = [f"{row['domain']}:{row['code']}" for _, row in entries]
     vignette = next((plates[key] for key in keys if key in plates), None)
 
+    index_entries, script = context
     detail, found = [], []
     for (layer, _), key in zip(entries, keys, strict=True):
-        items = problems(key, scores, issues)
+        items = problems(key, scores, issues, script)
         if items:
             detail.append(_problem_html(items, geometry(layer)))
-            found += items
+            found += [i["text"] for i in items]
     if vignette is None:
-        missing = "ℹ pas de vignette dans le catalogue CNIG"
+        missing = no_plate([index_entries[key] for key in keys])
         detail.append(_problem_html([missing]))
-        found.append(missing)
+        found.append(missing["text"])
 
     notes = f"<ul>{''.join(detail)}</ul>" if detail else '<span class="ok">aucune</span>'
     cells = [
@@ -681,6 +729,10 @@ def write_html(sections, images, scores, sha):
     Le filtre de la page propose chaque type de problème présent, avec son nombre de fiches."""
     plates = read_json(REPORT_DIR / "cnig/plates.json", {})
     issues = read_json(ISSUES, {})
+    context = (
+        {f"{e['domain']}:{e['code']}": e for e in read_json(CNIG_INDEX)["entries"]},
+        read_json(SCRIPT_DIR / "index.json", {}),
+    )
     ncols = 4 + len(VARIANTS)
     html_sections, nav = [], []
     totals = {"all": 0, "warn": 0, "note": 0}
@@ -688,7 +740,7 @@ def write_html(sections, images, scores, sha):
     for name, sec in sections.items():
         rows, n_warn, n_note = [], 0, 0
         for group in sec["groups"]:
-            row, found = sheet_row(name, sec, group, images, plates, scores, issues)
+            row, found = sheet_row(name, sec, group, images, plates, scores, issues, context)
             rows.append(row)
             n_warn += any(p.startswith("⚠") for p in found)
             n_note += bool(found)

@@ -13,7 +13,7 @@ Sorties :
                                               symbole = code), hrefs relatifs « X.svg?… »
   data/symbols/script/index.json             clé « domaine:code » → {file, source, notes}
   data/symbols/script/sup_rules.json         règles d'ASSIETTE_SUP_S.qml (suptype, typeass, échelle)
-  data/symbols/issues.json                   problèmes du symbole d'origine par code (« ⚠ » / « ℹ »)
+  data/symbols/issues.json                   problèmes du symbole d'origine par code : [{text, files}]
   data/svg/                                  images (SVG CNIG, PSMV préfixées psmv_ ; tuiles pat_, rot_)
   data/fonts/                                polices des symboles et des étiquettes
 """
@@ -114,17 +114,18 @@ def text_symbolizer(text_symbol, attr):
 
 
 def lyrx_labels(index):
-    """Étiquettes des couches ArcGIS (.lyrx CNIG, seule source qui en définit) → (labels, skipped).
+    """Étiquettes des couches ArcGIS (.lyrx CNIG, seule source qui en définit) → (labels, skipped, sources).
 
     labels : {clé de code : TextSymbolizer} pour les classes visibles dont la clause where vise un code
     (« symb_lin = 'PSC-L_39-50_001' ») ou un attribut métier (« typzone = 'U' » → codes de la couche dont
     l'attribut vaut 'U') et dont le texte est un champ ($feature.typzone → attribut GPU typezone).
     skipped : {clé : texte} des étiquettes à texte constant (« "12" »), absentes du QML et de la vignette
-    du catalogue, non reprises."""
+    du catalogue, non reprises.
+    sources : {clé : chemin du .lyrx dans le dépôt CNIG} des étiquettes reprises ou non."""
     by_domain = {}
     for e in index["entries"]:
         by_domain.setdefault(e["domain"], []).append(e)
-    labels, skipped = {}, {}
+    labels, skipped, sources = {}, {}, {}
     for folder, domain in LYRX_DOMAINS.items():
         for lyrx in sorted((CNIG_DIR / folder / "ArcGISpro/LYRX").glob("*.lyrx")):
             data = json.loads(lyrx.read_text(encoding="utf-8-sig"))
@@ -150,6 +151,8 @@ def lyrx_labels(index):
                     constant = re.match(r'^"([^"]*)"$', expr)
                     if not targets or not (field or constant):
                         continue
+                    rel = str(lyrx.relative_to(CNIG_DIR))
+                    sources.update({key_of(e): rel for e in targets})
                     if constant:
                         skipped.update({key_of(e): constant.group(1) for e in targets})
                         continue
@@ -158,7 +161,7 @@ def lyrx_labels(index):
                         # attribut GPU : celui de l'entrée qui porte la valeur filtrée (typzone → typezone)
                         attr = next((k for k, v in e["attrs"].items() if v == value), field.group(1).lower())
                         labels[key_of(e)] = text_symbolizer(text_symbol, attr)
-    return labels, skipped
+    return labels, skipped, sources
 
 
 @functools.cache
@@ -406,63 +409,172 @@ def svg_dimensions():
     return n
 
 
-def origin_issues(e, entry):
-    """Diagnostics sur l'origine du style d'un code (QML, sous-code rattaché, aucun style)."""
+def issue(text, *files):
+    """Problème : texte « ⚠ » / « ℹ » et fichiers attendus ou en cause [[chemin, rôle]], chemins du dépôt CNIG
+    sauf ceux de sg5-to-gpu (data/…), affichés en infobulle sur la planche."""
+    return {"text": text, "files": [list(f) for f in files if f]}
+
+
+def produced(entry):
+    """Fichier SLD produit par sg5-to-gpu pour un code."""
+    return f"data/symbols/script/{entry['file']}", "SLD produit (sg5-to-gpu)"
+
+
+def origin_issues(e, entry, expected, ref):
+    """Diagnostics sur l'origine du style d'un code (QML, sous-code rattaché, aucun style).
+    expected : (QML de la couche, rôle) où la catégorie du code est attendue ;
+    ref : (SLD CNIG, QML source) du code dont le style est repris, ou (None, None)."""
     out = []
     source = entry["source"] if entry else ""
-    ref = source[2:]
+    code_ref = source[2:]
+    ref_sld, ref_qml = ref
+    own_sld = (e["sld"], "SLD CNIG du code") if e.get("sld") else None
+    taken = (ref_qml, f"symbole de {code_ref} repris") if ref_qml else None
     if entry is None and e.get("sld"):
         out.append(
-            f"⚠ absent des QML CNIG, sans code QML équivalent ni code principal : aucun style produit "
-            f"(son fichier {e['sld']} n'est pas utilisé)"
+            issue(
+                "⚠ absent des QML CNIG, sans code QML équivalent ni code principal : aucun style produit "
+                "(son fichier SLD CNIG n'est pas utilisé)",
+                expected,
+                (e["sld"], "SLD CNIG non utilisé"),
+            )
         )
     elif entry is None:
-        out.append("⚠ aucun style CNIG (ni QML, ni fichier SLD par code)")
+        folder = e["domain"].upper()
+        expected_sld = (f"{folder}/SLD/{e['code']}.sld", "SLD par code absent") if folder != "SUP" else None
+        out.append(issue("⚠ aucun style CNIG : ni QML, ni fichier SLD par code", expected, expected_sld))
     elif source.startswith("= ") and entry.get("main_code"):
         if e.get("sld"):
-            out.append(f"⚠ absent des QML CNIG ; pourtant, le SLD de {Path(e['sld']).name} diffère de celui de {ref}")
+            out.append(
+                issue(
+                    f"⚠ absent des QML CNIG ; pourtant, le SLD de {Path(e['sld']).name} diffère de celui de {code_ref}",
+                    expected,
+                    own_sld,
+                    (ref_sld, f"SLD CNIG de {code_ref}") if ref_sld else None,
+                    taken,
+                )
+            )
         else:
-            out.append(f"⚠ absent des QML CNIG : style du code principal {ref}")
+            out.append(issue(f"⚠ absent des QML CNIG : style du code principal {code_ref}", expected, taken))
     elif source.startswith("= "):
-        out.append(f"ℹ absent des QML CNIG : style de {ref} (fichier SLD identique)")
+        out.append(
+            issue(
+                f"ℹ absent des QML CNIG : style de {code_ref} (fichier SLD identique)",
+                expected,
+                own_sld,
+                (ref_sld, f"SLD CNIG de {code_ref}, identique") if ref_sld else None,
+                taken,
+            )
+        )
     return out
 
 
-def style_issues(key, entry, labels, skipped):
-    """Diagnostics sur le style produit : pictogrammes, étiquettes, marques de police."""
-    out = list(entry.get("notes", []))
+def style_issues(e, entry, qml, lyrx, labels, skipped):
+    """Diagnostics sur le style produit : notes de conversion, pictogrammes, étiquettes, marques de police.
+    qml : QML CNIG d'où vient le symbole ; lyrx : .lyrx CNIG de l'étiquette du code, ou None."""
+    key = key_of(e)
+    folder = e["domain"].upper()
+    source = (qml, "symbole QGIS converti") if qml else None
+    lyrx_file = (lyrx, "étiquette ArcGIS") if lyrx else None
+    out = []
+    for note in entry.get("notes", []):
+        extra = []
+        if "étiquette" in note or ".lyrx" in note:
+            extra.append(lyrx_file)
+        font = re.match(r"⚠ police d'étiquette (.+?) absente", note)
+        if font:
+            extra.append(("__Ressources/", f"fichier de la police {font.group(1)} attendu"))
+        out.append(issue(note, source, produced(entry), *extra))
     text = (SCRIPT_DIR / entry["file"]).read_text(encoding="utf-8")
     for name in sorted({h.rsplit("/", 1)[-1] for h in re.findall(r'xlink:href="([^"?]+)', text)}):
         if name.startswith(("pat_", "rot_")):
             continue
         if not (SVG_DIR / name).is_file():
-            out.append(f"⚠ pictogramme {name} manquant")
+            out.append(
+                issue(
+                    f"⚠ pictogramme {name} manquant",
+                    (f"data/svg/{name}", "pictogramme attendu (sg5-to-gpu)"),
+                    produced(entry),
+                    source,
+                )
+            )
             continue
         if name.startswith("qml_"):
-            out.append(f"ℹ pictogramme du QML absent des SVG CNIG ({name})")
+            svg_dir = f"{folder}/SLD/" if (CNIG_DIR / folder / "SLD").is_dir() else f"{folder}/"
+            out.append(
+                issue(
+                    f"ℹ pictogramme du QML absent des SVG CNIG ({name})",
+                    (svg_dir, "SVG attendu, avec les autres pictogrammes CNIG"),
+                    (qml, "pictogramme embarqué dans le QML") if qml else None,
+                )
+            )
     if key in labels:
-        out.append("ℹ étiquette reprise de la couche ArcGIS (.lyrx), absente du QML et du SLD CNIG")
+        out.append(
+            issue(
+                "ℹ étiquette reprise de la couche ArcGIS (.lyrx), absente du QML et du SLD CNIG",
+                lyrx_file,
+                (qml, "étiquette attendue") if qml else None,
+                (e["sld"], "étiquette attendue") if e.get("sld") else None,
+            )
+        )
     if key in skipped:
         out.append(
-            f"ℹ étiquette « {skipped[key]} » du .lyrx non reprise (texte constant, absent du QML "
-            f"et de la vignette du catalogue)"
+            issue(
+                f"ℹ étiquette « {skipped[key]} » du .lyrx non reprise (texte constant, absent du QML "
+                f"et de la vignette du catalogue)",
+                (lyrx, "étiquette à texte constant") if lyrx else None,
+                (qml, "étiquette absente") if qml else None,
+            )
         )
     for font, char in sorted(set(re.findall(r"ttf://([^#<]+)#(0x[0-9A-Fa-f]+)", text))):
-        out.append(f"ℹ marque de police {font} {char} : rendu dépendant des polices de GeoServer")
+        out.append(
+            issue(
+                f"ℹ marque de police {font} {char} : rendu dépendant des polices de GeoServer",
+                source,
+                ("__Ressources/", f"fichier de la police {font} attendu"),
+            )
+        )
     return out
 
 
-def build_issues(index, result, labels, skipped):
-    """Problèmes du symbole d'origine, par code : « ⚠ » non reproductible / défaut, « ℹ » information."""
+def build_issues(index, result, labels, skipped, lyrx_sources):
+    """Problèmes du symbole d'origine, par code : « ⚠ » non reproductible / défaut, « ℹ » information,
+    chacun avec les fichiers attendus ou en cause."""
+    entries = {key_of(e): e for e in index["entries"]}
+
+    def qml_of(key, seen=()):
+        """QML CNIG d'où vient le symbole d'un code (en suivant les codes dont le style est repris)."""
+        source = result.get(key, {}).get("source")
+        if not source or key in seen:
+            return None
+        if not source.startswith("= "):
+            return source
+        return qml_of(f"{key.split(':', 1)[0]}:{source[2:]}", (*seen, key))
+
+    # QML de chaque couche (domaine, couche GPU), d'après les codes convertis directement depuis un QML
+    layer_qml = {}
+    for key, e in entries.items():
+        source = result.get(key, {}).get("source", "=")
+        if not source.startswith("="):
+            layer_qml.setdefault((e["domain"], e["layer"]), source)
     issues = {}
-    for e in index["entries"]:
-        key = key_of(e)
+    for key, e in entries.items():
         entry = result.get(key)
-        found = origin_issues(e, entry)
+        qml = layer_qml.get((e["domain"], e["layer"]))
+        expected = (
+            (qml, f"catégorie « {e['code']} » attendue")
+            if qml
+            else (f"{e['domain'].upper()}/QGIS/QML/", f"aucun QML pour la couche {e['layer']}")
+        )
+        ref = (None, None)
+        if entry and entry["source"].startswith("= "):
+            ref_key = f"{e['domain']}:{entry['source'][2:]}"
+            ref = (entries.get(ref_key, {}).get("sld"), qml_of(ref_key))
+        found = origin_issues(e, entry, expected, ref)
         if entry:
-            found += style_issues(key, entry, labels, skipped)
+            found += style_issues(e, entry, qml_of(key), lyrx_sources.get(key), labels, skipped)
         if found:
-            issues[key] = list(dict.fromkeys(found))
+            issues[key] = list({i["text"]: i for i in found}.values())
     return issues
 
 
@@ -485,7 +597,7 @@ def main():
     shutil.rmtree(SVG_DIR, ignore_errors=True)  # régénéré entièrement à chaque passe
     SVG_DIR.mkdir(parents=True)
 
-    labels, skipped = lyrx_labels(index)
+    labels, skipped, lyrx_sources = lyrx_labels(index)
     print(f"   étiquettes ArcGIS (lyrx) : {len(labels)} codes")
     result, sup_rules = convert(index, labels)
     direct = sum(1 for v in result.values() if not v["source"].startswith("="))
@@ -500,9 +612,9 @@ def main():
         f"({n} SVG complétés de width/height)"
     )
 
-    issues = build_issues(index, result, labels, skipped)
+    issues = build_issues(index, result, labels, skipped, lyrx_sources)
     write_json(SYMBOLS_DIR / "issues.json", issues)
-    warn = sum(1 for v in issues.values() if any(i.startswith("⚠") for i in v))
+    warn = sum(1 for v in issues.values() if any(i["text"].startswith("⚠") for i in v))
     print(
         f"✅ diagnostics : {len(issues)} codes signalés dont {warn} avec « ⚠ » → "
         f"{(SYMBOLS_DIR / 'issues.json').relative_to(ROOT)}"

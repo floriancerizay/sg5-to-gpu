@@ -9,3 +9,4 @@ __pycache__/
 
 # Planche : suivie en git (publiée par GitHub Pages), sauf les fichiers de travail
 /report/qgis_jobs.json
+TODO.md

@@ -113,6 +113,8 @@ def sheet_header(lines, width, sup=False):
 def plates_psc_inf(img, lines, head):
     """Fiche prescription / information : vignette entre l'étiquette, le panneau de droite et le symbole ponctuel."""
     key = norm(head.text)
+    if not key:  # fiche sans étiquette (ex. PLU 04-00 du catalogue 5a838ff : « (S) » seul)
+        return {}
     label = next(
         (line for line in lines if line.x0 < 300 and line.y0 > 60 and norm(line.text).startswith(key[:5])), None
     )

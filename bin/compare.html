@@ -71,6 +71,16 @@ li.w .ico { color: var(--warn); }
 .ok { color: var(--ok); font-size: 13px; }
 .reco { margin-top: 3px; font-size: 12px; color: var(--text); opacity: .8; }
 .reco::before { content: "→ "; }
+/* fichiers attendus ou en cause : infobulle au survol ou au focus (texte sélectionnable) */
+.files { position: relative; display: inline-flex; vertical-align: -1px; margin-left: 5px; color: var(--muted);
+  cursor: help; border-radius: 3px; }
+.files:hover, .files:focus { color: var(--accent); outline: none; }
+.files .tip { display: none; position: absolute; z-index: 5; top: 100%; right: -8px; padding: 8px 10px;
+  width: max-content; max-width: min(560px, 80vw); background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, .12);
+  font-size: 12px; line-height: 1.5; cursor: text; overflow-wrap: anywhere; }
+.files:hover .tip, .files:focus .tip, .files:focus-within .tip { display: flex; flex-direction: column; gap: 2px; }
+.files .tip code { background: var(--soft); padding: 0 4px; border-radius: 3px; }
 
 /* titres de section */
 tr.sec td { background: var(--accent-soft); padding: 12px 8px; border-bottom: 2px solid var(--accent); }
@@ -84,7 +94,7 @@ tr.sec h2 { display: inline; font-size: 17px; margin: 0 14px 0 0; }
 @media print {
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body { zoom: 0.72; }
-  .bar, .print { display: none; }
+  .bar, .print, .files { display: none; }
   header, main { padding-left: 0; padding-right: 0; }
   th { position: static; }
   thead { display: table-header-group; }
