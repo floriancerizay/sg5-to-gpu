@@ -509,15 +509,59 @@ def compute_scores(layers, img_dir):
 PAGE = Template((Path(__file__).parent / "compare.html").read_text(encoding="utf-8"))  # gabarit de la planche
 
 
-def tile(img, i, css="render"):
-    """Cellule du tableau : portion i de l'image d'une section (ou « — »)."""
+def tile(img, i, css="render", badge=""):
+    """Cellule du tableau : portion i de l'image d'une section (ou « — »), pastille éventuelle."""
     if img is None:
         return f'<td class="{css}"><div class="na">—</div></td>'
     col, row = i % COLS, i // COLS
     return (
         f'<td class="{css}"><div class="t" style="background-image:url(img/{img});'
-        f'background-position:-{col * TILE}px -{row * TILE}px"></div></td>'
+        f'background-position:-{col * TILE}px -{row * TILE}px">{badge}</div></td>'
     )
+
+
+SVG_KINDS = (  # préfixe → (singulier, pluriel)
+    ("pat_", ("tuile de trame", "tuiles de trame")),
+    ("rot_", ("picto tourné", "pictos tournés")),
+    ("", ("picto", "pictos")),
+)
+
+
+@functools.cache
+def svg_images(path):
+    """Images (SVG) référencées par un SLD par code → noms de fichier, dans l'ordre, sans doublon."""
+    names = [
+        res.get(f"{{{sld.NS_XLINK}}}href", "").split("?")[0].rsplit("/", 1)[-1]
+        for res in sld.parse(path).iter(f"{{{sld.NS_SLD}}}OnlineResource")
+    ]
+    return tuple(dict.fromkeys(n for n in names if n))
+
+
+def fiche_svgs(keys, script):
+    """Images (SVG) chargées par les styles des codes d'une fiche, dans l'ordre, sans doublon."""
+    return list(dict.fromkeys(n for k in keys if k in script for n in svg_images(SCRIPT_DIR / script[k]["file"])))
+
+
+def svg_kind(name, plural=False):
+    return next(labels for prefix, labels in SVG_KINDS if name.startswith(prefix))[plural]
+
+
+def svg_badge(names):
+    """Pastille « SVG » de la vignette script quand le style charge des images, détail en infobulle."""
+    if not names:
+        return ""
+    tip = "\n".join(f"{svg_kind(n)} : {n}" for n in names)
+    count = f" ×{len(names)}" if len(names) > 1 else ""
+    return f'<span class="svg" title="{html.escape(tip)}">SVG{count}</span>'
+
+
+def svg_summary(names):
+    """« N SVG différents (x tuiles de trame, y pictos…) »."""
+    kinds = {}
+    for n in sorted(names):
+        kinds.setdefault(svg_kind(n), []).append(n)
+    detail = ", ".join(f"{len(v)} {svg_kind(v[0], len(v) > 1)}" for v in kinds.values())
+    return f"{len(names)} SVG différent{'s' if len(names) > 1 else ''}" + (f" ({detail})" if detail else "")
 
 
 # Types de problème proposés par le filtre de la planche : (clé, libellé, motif reconnu dans le message).
@@ -684,7 +728,7 @@ def plate(name):
 
 
 def sheet_row(name, sec, group, images, plates, scores, issues, context):
-    """Ligne HTML d'une fiche → (html, remarques « ⚠ » / « ℹ » de la fiche)."""
+    """Ligne HTML d'une fiche → (html, remarques « ⚠ » / « ℹ » de la fiche, SVG chargés par ses styles)."""
     entries = [(layer, group["codes"][layer]) for layer in sec["layers"] if layer in group["codes"]]
     first = entries[0][1]
 
@@ -697,6 +741,7 @@ def sheet_row(name, sec, group, images, plates, scores, issues, context):
     vignette = next((plates[key] for key in keys if key in plates), None)
 
     index_entries, script = context
+    svgs = fiche_svgs(keys, script)
     detail, found = [], []
     for (layer, _), key in zip(entries, keys, strict=True):
         items = problems(key, scores, issues, script)
@@ -713,13 +758,16 @@ def sheet_row(name, sec, group, images, plates, scores, issues, context):
         f'<td class="codes">{codes}<span class="cls">{html.escape(first["classement"])}</span></td>',
         f'<td class="lab">{html.escape(first["label"])}</td>',
         plate(vignette),
-        *(tile(images.get((name, v)), group["cell"]) for v in MAIN_VARIANTS),
+        *(
+            tile(images.get((name, v)), group["cell"], badge=svg_badge(svgs) if v == "script" else "")
+            for v in MAIN_VARIANTS
+        ),
         f'<td class="pb">{notes}</td>',
         tile(images.get((name, "prod")), group["cell"], "render prod"),
     ]
     types = sorted({problem_type(message) for message in found})
     opening = f'<tr data-types="{" ".join(types)}">' if types else "<tr>"
-    return opening + "".join(cells) + "</tr>", found
+    return opening + "".join(cells) + "</tr>", found, svgs
 
 
 def write_html(sections, images, scores, sha):
@@ -736,11 +784,13 @@ def write_html(sections, images, scores, sha):
     ncols = 4 + len(VARIANTS)
     html_sections, nav = [], []
     totals = {"all": 0, "warn": 0, "note": 0}
+    all_svgs = set()  # SVG chargés par les styles script de la planche
     type_counts = {}  # type de problème (et « any ») → nombre de fiches
     for name, sec in sections.items():
-        rows, n_warn, n_note = [], 0, 0
+        rows, n_warn, n_note, section_svgs = [], 0, 0, set()
         for group in sec["groups"]:
-            row, found = sheet_row(name, sec, group, images, plates, scores, issues, context)
+            row, found, svgs = sheet_row(name, sec, group, images, plates, scores, issues, context)
+            section_svgs.update(svgs)
             rows.append(row)
             n_warn += any(p.startswith("⚠") for p in found)
             n_note += bool(found)
@@ -750,12 +800,14 @@ def write_html(sections, images, scores, sha):
         totals["all"] += n
         totals["warn"] += n_warn
         totals["note"] += n_note
+        all_svgs |= section_svgs
         label = SECTION_TITLES.get(name, name)
         nav.append(f'<a href="#{name}" data-section="{name}">{label}</a>')
         title = (
             f"<h2>{label}</h2><span class=stat>{n} fiches</span>"
             f'<span class="stat{" w" if n_warn else ""}">{n_warn} avec ⚠</span>'
             f'<span class="stat">{n_note} avec remarque</span>'
+            f'<span class="stat">{svg_summary(section_svgs)}</span>'
         )
         html_sections.append(
             f'<tbody data-section="{name}"><tr class="sec" id="{name}"><td colspan="{ncols}">{title}</td></tr>'
@@ -766,6 +818,7 @@ def write_html(sections, images, scores, sha):
         PAGE.substitute(
             tile=TILE,
             sha=sha,
+            svgs=svg_summary(all_svgs),
             scale=int(RES / 0.00028),
             nav=" ".join(nav),
             filters=filter_options(type_counts, totals["all"]),

@@ -13,8 +13,11 @@ Tuiles SVG de remplissage synthétisées, pour contourner des limites du Graphic
 Une trame (Graphic de GraphicFill + graphic-margin) devient un SVG de exactement pas_x × pas_y,
 motif centré, rotation, opacité et couleurs intégrées ; les trames consécutives de même pas sont
 fusionnées dans une seule tuile ; une tuile trop petite est répétée k × k fois.
+Exception : une trame seule que GeoServer rend juste (marque simple ou hachure continue, sans rotation hors
+multiple de 90° ni décalage, au pas entier) reste native : une image de moins à charger, rendu identique.
 Les hachures deviennent une tuile périodique d/|sin θ| × d/|cos θ| traversée par les traits ; les
-hachures consécutives de même angle et même pas sont fusionnées (écart entre traits conservé).
+hachures consécutives de même angle et même pas sont fusionnées (écart entre traits conservé), de même que les
+hachures croisées de même tuile (±45°, 0° / 90°).
 Hachure tiretée : horizontale / verticale, tuile d × période du tiret ; oblique, les tirets de tous les traits
 partent d'une même perpendiculaire (comme QGIS) et la tuile est répétée k fois avec k·w·|cos θ| et k·h·sin θ
 multiples de la période du tiret (ajustée à l'échelle près). À 45°, shape://slash|backslash natif (correct) tant
@@ -50,6 +53,7 @@ JITTER = "{urn:test-symbo}jitter"  # attribut interne posé par qml2sld
 MAX_TILE = 96.0  # px : borne de la recherche de k
 SAME_PITCH = 0.05  # écart relatif de pas en dessous duquel deux trames superposées sont fusionnées
 MAX_DASH_TILE = 320.0  # px : idem pour une hachure tiretée oblique (contrainte de période du tiret)
+NATIVE_MARKS = {"circle", "square", "triangle", "star"}  # marques de trame laissées natives (hors police)
 NS_SVG = "http://www.w3.org/2000/svg"
 SVG_PARAM_DEFAULTS = {
     "fill": "#000000",
@@ -58,6 +62,12 @@ SVG_PARAM_DEFAULTS = {
     "outline-opacity": "1",
     "outline-width": "0",
 }
+
+
+def _whole(v):
+    """Pas v (px) entier : GeoServer pixellise la tuile d'une marque native à sa taille entière, sans écart.
+    Un pas fractionnaire arrondi fausse la densité (trames fines) et l'aspect des traits (mesuré)."""
+    return v >= 1 and abs(v - round(v)) <= 0.01
 
 
 def _f(text, default=0.0):
@@ -274,12 +284,25 @@ def point_motif(sym, svg_dir):
     if w + left + right < 0.5 or h + top + bottom < 0.5:
         return None  # pas nul ou négatif : rendu natif
     jitter = [float(v) for v in (sym.get(JITTER) or "").split()]
+    wkn = child(mark, "WellKnownName") if mark is not None else None
+    # Marque simple, sans rotation ni décalage, au pas entier : GeoServer la rend juste en natif (aucun des
+    # défauts 1, 3, 4) ; gardée telle quelle si elle ne partage pas sa tuile (défaut 2).
+    native = (
+        wkn is not None
+        and (wkn.text or "").strip() in NATIVE_MARKS
+        and not rot
+        and not jitter
+        and min(top, right, bottom, left) >= 0
+        and shift == (0, 0)
+        and all(_whole(v) for v in (size, w + left + right, h + top + bottom))
+    )
     return {
         "w": w + left + right,
         "h": h + top + bottom,
         "el": group,
         "shift": shift,
         "jitter": tuple(jitter) if len(jitter) == 3 else None,
+        "native": native,
     }
 
 
@@ -340,6 +363,11 @@ def hatch_motif(sym):
         "dash": dash or None,
         "along": (w * cos, h * sin) if dash and not axis else None,
         "axis": axis,
+        # trait continu tourné d'un multiple de 90° (dessin de la marque intact), au pas entier : natif juste
+        "native": not dash
+        and _child_float(g, "Rotation") % 90 == 0
+        and (dx, dy) == (0, 0)
+        and _whole(_child_float(g, "Size")),
     }
 
 
@@ -460,24 +488,34 @@ def _replace_graphic(sym, href, size):
 
 
 def _mergeable(first, group, sym, svg_dir):
-    """Motif de `sym` s'il peut rejoindre la tuile commencée par le motif `first` (même pas, même angle…),
-    sinon None."""
-    if first.get("hatch") is not None:
-        nxt = hatch_motif(sym)
-        if nxt is None or abs(nxt["hatch"] - first["hatch"]) > 1e-3 or abs(nxt["d"] - first["d"]) > 0.05:
-            return None
-        if nxt.get("dash") and any(m.get("dash") for m in group):
-            return None  # un seul tireté par tuile
-        if not first["axis"] and (abs(nxt["w"] - first["w"]) > 0.05 or abs(nxt["h"] - first["h"]) > 0.05):
-            return None
-        return nxt
-    nxt = point_motif(sym, svg_dir)
+    """Motif de `sym` s'il peut rejoindre la tuile commencée par le motif `first`, sinon None.
+
+    Hachures : même angle et même pas, ou angles différents sur une même tuile (hachures croisées).
+    Pictos : pas presque égaux (SAME_PITCH, SLD CNIG : 29 / 30 px pour les deux trames de PSC-S_01), la tuile
+    prend le pas du 1er. Hachure et pictos restent séparés : recaler la hachure sur le pas des pictos
+    (PSC-S_15 : 21,42 / 21,2 px) déplace la phase de ses traits, plus nets et plus foncés que chez QGIS (mesuré)."""
+    nxt = point_motif(sym, svg_dir) or hatch_motif(sym)
     if nxt is None or nxt.get("jitter") or first.get("jitter"):
         return None  # trame à points décalés : tuile à part
-    # pas presque égaux (SLD CNIG : 29 / 30 px pour les deux trames de PSC-S_01) : même tuile, pas du 1er
+    if (nxt.get("hatch") is None) != (first.get("hatch") is None):
+        return None
+    if first.get("hatch") is not None:
+        return nxt if _hatches_fit(first, group, nxt) else None
     if abs(nxt["w"] - first["w"]) > SAME_PITCH * first["w"] or abs(nxt["h"] - first["h"]) > SAME_PITCH * first["h"]:
         return None
     return nxt
+
+
+def _hatches_fit(first, group, nxt):
+    """Hachure `nxt` compatible avec la tuile des hachures `group` (commencée par `first`)."""
+    same_size = abs(nxt["w"] - first["w"]) <= 0.05 and abs(nxt["h"] - first["h"]) <= 0.05
+    if abs(nxt["hatch"] - first["hatch"]) > 1e-3:  # hachures croisées : sans tireté, même tuile
+        return same_size and not nxt.get("dash") and not any(m.get("dash") for m in group)
+    if abs(nxt["d"] - first["d"]) > 0.05:
+        return False
+    if nxt.get("dash") and any(m.get("dash") for m in group):
+        return False  # un seul tireté par tuile
+    return first["axis"] or same_size
 
 
 def _clamp_negative_margin(sym):
@@ -507,6 +545,11 @@ def synthesize(syms, svg_dir):
             j += 1
         for sym in syms[i:j]:
             sym.attrib.pop(JITTER, None)
+        if j == i + 1 and first["native"]:  # trame seule, rendue juste par GeoServer : pas d'image
+            _clamp_negative_margin(syms[i])
+            out.append(syms[i])
+            i += 1
+            continue
         data, size = tile_svg(group)
         name = f"pat_{hashlib.sha1(data).hexdigest()[:12]}.svg"
         (Path(svg_dir) / name).write_bytes(data)

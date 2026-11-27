@@ -51,12 +51,14 @@ Pour chaque catégorie des QML CNIG (et chaque règle d’`ASSIETTE_SUP_S.qml`),
 | `LinePatternFill` | `PolygonSymbolizer` / `GraphicFill` : hachures |
 | `CentroidFill` | `PointSymbolizer` au centroïde |
 | `SimpleMarker`, `FontMarker` | `Mark` (forme connue, `ttf://Police#0xNN`) |
-| `SvgMarker`, `EllipseMarker` | `ExternalGraphic` : SVG embarqué, renommé comme le SVG CNIG de même contenu, ou SVG généré |
+| `SvgMarker`, `EllipseMarker` | `ExternalGraphic` : SVG embarqué, renommé comme le SVG CNIG de même contenu, ou SVG généré ; un seul fichier par dessin (copies PLU / PSMV, même dessin à une autre échelle), sauf picto à contour d’échelle différente |
 
 **Contournements de GeoServer** (`pattern_tiles.py`, raisons dans [geoserver.md](geoserver.md)) :
 
-- chaque trame (pictos, caractères de police, hachures, sauf les hachures à 45° dont le tiret tient dans la marque) devient une tuile SVG au pas exact, `data/svg/pat_<hash>.svg`, avec rotation et couleurs intégrées ; les trames superposées de même pas sont fusionnées ;
+- chaque trame (pictos, caractères de police, hachures, sauf les hachures à 45° dont le tiret tient dans la marque) devient une tuile SVG au pas exact, `data/svg/pat_<hash>.svg`, avec rotation et couleurs intégrées ; les trames superposées de même pas et les hachures croisées de même tuile sont fusionnées ; une trame seule que GeoServer rend juste (marque simple ou hachure continue, au pas entier, sans rotation hors multiple de 90° ni décalage) reste native ;
 - les pictos le long des lignes sont tournés dans une copie du SVG (`rot_<hash>.svg`), leur décalage est reporté en `stroke-dashoffset` / `PerpendicularOffset`, et le picto de début de ligne est ajouté sur `startPoint`.
+
+**Pictos natifs** (`wkt_marks.py`) : un picto ponctuel (`PointSymbolizer`, dont le picto de début de ligne) devient une marque `wkt://` : tracé du SVG aplati, couleurs des paramètres de l’URL, aucune image à charger. Les pictos le long des lignes (`GraphicStroke`) et les tuiles de trame restent des SVG.
 
 **Étiquettes** : seuls les `.lyrx` en définissent. Leurs classes visibles dont le texte vient d’un champ (`$feature.typzone`) deviennent des `TextSymbolizer`. La police est prise dans `STYLES/data/fonts`, sinon dans le système, sinon remplacée par un substitut libre ; le halo d’une zone prend la couleur de la zone quand le `.lyrx` diverge (AUc).
 

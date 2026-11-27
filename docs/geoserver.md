@@ -20,6 +20,11 @@ Mesurés sur le GeoServer local ; ils valent aussi pour les styles de production
 | `stroke-dashoffset` négatif refusé ; au-delà de l’intervalle du tireté d’un `GraphicStroke` : **plantage de la couche** | couche non rendue | décalage ramené dans [0, intervalle), décalage commun des tiretés du symbole |
 | `stroke-dasharray` à intervalle nul | plantage de la couche | tireté d’origine conservé |
 | Images externes **en cache par URL** | un picto remplacé sous le même nom reste affiché dans son ancienne version | empreinte du contenu dans l’URL ; à prévoir au déploiement |
+| Images `http(s)` d’une `ExternalGraphic` **non chargées, sans message** tant que le contrôle d’URL (*URL Checks*, 2.28) n’a pas de règle qui les autorise | pictos et trames absents, aucune requête émise, aucune erreur au journal | au déploiement : règle autorisant `SLD_IMG_URL` |
+| Images `http(s)` chargées **une à une** pendant le rendu, à la 1re utilisation de chaque URL (puis en cache) | après redémarrage, 1er GetMap d’une couche = nombre d’images × latence (106 images à 250 ms : 27 s pour `prescription_surf`) ; ensuite, aucun surcoût mesuré | préchauffer le cache après déploiement / redémarrage, ou servir les images depuis le data_dir |
+| Trame native au pas fractionnaire : tuile arrondie au pixel, trait calé sur la grille | densité faussée (trames de points fins), traits plus nets et plus foncés que QGIS | trame native seulement au pas entier, sinon tuile SVG |
+| Marque `wkt://` : origine de la géométrie sur le point (pas de recentrage), y vers le haut, **hauteur de l’emprise mise à `Size`** ; emprise d’un `POLYGON` = son anneau extérieur | picto en plusieurs morceaux écrit en `POLYGON` : marque ~3 fois trop grande (INF-P_16) | coordonnées centrées sur le viewBox, `MULTIPOLYGON` (anneaux classés par imbrication), `Size` × hauteur du tracé / hauteur du viewBox |
+| Marque dans un `GraphicStroke` : espacée et orientée autrement qu’une image | vagues jointives (INF-L_19), flèches tournées (PSC-L_39) | pictos de ligne laissés en SVG |
 
 ## Limites
 

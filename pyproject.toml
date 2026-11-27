@@ -13,4 +13,4 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "C4", "PIE", "RET", "PERF", "RUF
 ignore = ["RUF001", "RUF002", "RUF003", "PERF203"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["config", "geoserver", "sld", "qml2sld", "pattern_tiles", "cnig_index"]
+known-first-party = ["config", "geoserver", "sld", "qml2sld", "pattern_tiles", "cnig_index", "wkt_marks"]

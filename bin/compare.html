@@ -47,7 +47,10 @@ tbody tr:not(.sec):hover { background: #fafbfc; }
 td.render, th.render { width: calc(var(--tile) + 16px); }
 td.prod, th.prod { border-left: 2px solid var(--line); }
 .t, .na, .plate { width: var(--tile); height: var(--tile); border-radius: 6px; }
-.t { background-repeat: no-repeat; border: 1px solid var(--line); }
+.t { position: relative; background-repeat: no-repeat; border: 1px solid var(--line); }
+/* vignette script : le style charge des images SVG (détail en infobulle) */
+.t .svg { position: absolute; right: 3px; bottom: 3px; padding: 0 5px; border-radius: 4px; font-size: 10px;
+  font-weight: 600; line-height: 16px; color: var(--accent); background: var(--accent-soft); cursor: help; }
 .na { display: flex; align-items: center; justify-content: center; color: #c0c4cc; border: 1px dashed var(--line); }
 .plate { display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); overflow: hidden; }
 .plate img { max-width: 100%; max-height: 100%; }
@@ -108,7 +111,7 @@ tr.sec h2 { display: inline; font-size: 17px; margin: 0 14px 0 0; }
     <h1>Symboles CNIG : planche de contrôle</h1>
     <button class="print" onclick="window.print()">Imprimer / PDF</button>
   </div>
-  <p class="meta">Dépôt CNIG <code>${sha}</code> · échelle ≈ 1:${scale} · rendus GeoServer et QGIS des styles produits par sg5-to-gpu</p>
+  <p class="meta">Dépôt CNIG <code>${sha}</code> · échelle ≈ 1:${scale} · rendus GeoServer et QGIS des styles produits par sg5-to-gpu · styles script : ${svgs}</p>
 </header>
 <div class="bar">
   <label>Afficher <select id="filter">${filters}</select></label>

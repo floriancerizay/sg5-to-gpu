@@ -50,6 +50,7 @@ from config import (
 )
 from pattern_tiles import stroke_graphics, synthesize
 from qml2sld import Converter, ogc_conditions, props, qml_color, rule_filter
+from wkt_marks import native_marks
 
 QML_DOMAINS = {"PLU": "plu", "PSMV": "psmv", "SUP": "sup"}
 LYRX_DOMAINS = {"PLU": "plu", "PSMV": "psmv"}  # seules couches ArcGIS qui définissent des étiquettes
@@ -267,7 +268,7 @@ def convert(index, labels):
     shutil.rmtree(SCRIPT_DIR, ignore_errors=True)
     svg_names = cnig_svg_by_sha1()
     entries = {key_of(e): e for e in index["entries"]}
-    result, sup_rules, stats = {}, [], {"tuiles": 0, "pictos de ligne": 0}
+    result, sup_rules, stats = {}, [], {"tuiles": 0, "pictos de ligne": 0, "pictos natifs": 0}
     for folder, domain in QML_DOMAINS.items():
         converter = Converter(SVG_DIR, domain, svg_names)
         for qml in sorted((CNIG_DIR / folder / "QGIS/QML").glob("*.qml")):
@@ -284,6 +285,7 @@ def convert(index, labels):
                 stats["pictos de ligne"] += stroke_graphics(
                     syms, SVG_DIR, symbol.get("type") == "fill", pitches, GEOMETRY_NAME
                 )
+                stats["pictos natifs"] += native_marks(syms, SVG_DIR)
                 if is_rule:
                     rule = sup_rule(name, info, syms, notes, len(sup_rules))
                     if rule:
@@ -407,6 +409,78 @@ def svg_dimensions():
         f.write_text(text[: m.start()] + tag + text[m.end() :], encoding="utf-8")
         n += 1
     return n
+
+
+SVG_NUMBER = re.compile(r"-?\d*\.?\d+(?:[eE][-+]?\d+)?")
+
+
+def svg_drawing(path):
+    """Signature du dessin d'un SVG à l'échelle et à la translation près : tracés absolus ramenés au viewBox
+    (hauteur 1, à 0,5 % près), autres attributs tels quels. Deux SVG de même signature rendent le même picto
+    à la même Size SLD (hauteur). → (signature, hauteur du viewBox), ou (None, None) si non comparable."""
+    root = etree.parse(str(path), etree.XMLParser(remove_comments=True)).getroot()
+    vb = [float(v) for v in (root.get("viewBox") or "").replace(",", " ").split()]
+    if len(vb) != 4 or vb[2] <= 0 or vb[3] <= 0:
+        return None, None
+    x0, y0, h = vb[0], vb[1], vb[3]
+    parts = [f"{vb[2] / h:.3f}"]
+    for el in root.iter():
+        tag = etree.QName(el).localname if isinstance(el.tag, str) else ""
+        if tag in ("title", "desc", "svg"):
+            continue
+        parts.append(f"<{tag}>{(el.text or '').strip()}")
+        for key, value in sorted(el.attrib.items()):
+            if key != "d":
+                parts.append(f"{key}={value}")
+            elif re.search(r"[a-zHVSQTA]", value):
+                return None, None  # commandes relatives ou à une coordonnée : non comparé
+            else:
+                xy = [float(v) for v in SVG_NUMBER.findall(value)]
+                norm = ",".join(f"{(v - (x0 if i % 2 == 0 else y0)) / h:.3f}" for i, v in enumerate(xy))
+                parts.append(f"d={SVG_NUMBER.sub('', value).replace(',', ' ').split()}:{norm}")
+    return "|".join(parts), h
+
+
+def share_svgs():
+    """Un seul fichier par dessin de picto : copies PLU / PSMV (psmv_…) et même dessin à une autre échelle
+    (« V » de PSC-L_15 et PSC-P_15) → hrefs des SLD par code renvoyés au fichier retenu (nom CNIG PLU, le plus
+    court), doublons supprimés. Un picto à contour (outline-width > 0, en unités du SVG) ne change de fichier
+    qu'à échelle égale. → (pictos référencés avant, après)."""
+    slds = sorted(SCRIPT_DIR.rglob("*.sld"))
+    href = re.compile(r'xlink:href="([^"?]+)(\?[^"]*)?"')
+    used = {m.group(1) for f in slds for m in href.finditer(f.read_text(encoding="utf-8"))}
+    used = {n for n in used if not n.startswith(("pat_", "rot_")) and (SVG_DIR / n).is_file()}
+    groups = {}
+    for name in used:
+        signature, height = svg_drawing(SVG_DIR / name)
+        groups.setdefault(signature or name, []).append((name, height))
+    target = {}  # nom → (nom retenu, hauteur du retenu, hauteur d'origine)
+    for members in groups.values():
+        keep, keep_h = min(members, key=lambda m: (m[0].startswith("psmv_"), len(m[0]), m[0]))
+        for name, height in members:
+            if name != keep:
+                target[name] = (keep, keep_h, height)
+
+    def replace(m):
+        name, query = m.group(1), m.group(2) or ""
+        if name not in target:
+            return m.group(0)
+        keep, keep_h, height = target[name]
+        outline = re.search(r"outline-width=([\d.]+)", query)
+        if outline and float(outline.group(1)) > 0 and abs(keep_h - height) > 0.01 * height:
+            return m.group(0)
+        return f'xlink:href="{keep}{query}"'
+
+    for f in slds:
+        text = f.read_text(encoding="utf-8")
+        new = href.sub(replace, text)
+        if new != text:
+            f.write_text(new, encoding="utf-8")
+    still = {m.group(1) for f in slds for m in href.finditer(f.read_text(encoding="utf-8"))}
+    for name in target:
+        if name not in still:
+            (SVG_DIR / name).unlink()
+    return len(used), len(used & still)
 
 
 def issue(text, *files):
@@ -607,6 +681,8 @@ def main():
     )
 
     n = svg_dimensions()
+    before, after = share_svgs()
+    print(f"   pictos SVG : {before} fichiers référencés → {after} après regroupement des dessins identiques")
     print(
         f"   {len(list(SVG_DIR.glob('*.svg')))} images dans {SVG_DIR.relative_to(ROOT)} "
         f"({n} SVG complétés de width/height)"
