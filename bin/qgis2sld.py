@@ -1,7 +1,8 @@
 """
-Conversion QML CNIG → symboliseurs SLD 1.0 GeoServer (préfixe sld:), sans dépendance externe.
+Conversion des symboles QGIS du CNIG (styles XML) → symboliseurs SLD 1.0 GeoServer (préfixe sld:), sans dépendance
+externe.
 
-Couvre les couches présentes dans les QML CNIG, en reproduisant le rendu QGIS à 0,28 mm/px :
+Couvre les couches présentes dans les styles CNIG, en reproduisant le rendu QGIS à 0,28 mm/px :
 
   SimpleLine        → LineSymbolizer (couleur, épaisseur, extrémités, tireté personnalisé ou style Qt
                       dash / dot / dash dot, décalage du tireté, décalage latéral)
@@ -14,7 +15,7 @@ Couvre les couches présentes dans les QML CNIG, en reproduisant le rendu QGIS �
   CentroidFill      → PointSymbolizer (GeoServer place le picto au centroïde du polygone)
   SimpleMarker      → Mark (circle, square, triangle, star, cross, x ; diamond = carré tourné de 45° ;
                       line = shape://vertline), contour aux valeurs par défaut de QGIS
-  SvgMarker         → ExternalGraphic (SVG embarqué → data/svg, nommé comme le SVG CNIG de même contenu ;
+  SvgMarker         → ExternalGraphic (SVG embarqué → data/svg, nommé d'après le code du symbole ;
                       la taille QGIS est la largeur, la taille SLD la hauteur)
   FontMarker        → Mark ttf://Police#0xNN
   EllipseMarker     → SVG généré (rectangle, ellipse)
@@ -154,28 +155,31 @@ def _num(v):
 
 
 class Converter:
-    """Conversion des symboles QML d'un domaine (plu, psmv, sup) ; écrit les SVG dans svg_dir."""
+    """Conversion des symboles QGIS d'un domaine (plu, psmv, sup) ; écrit les SVG dans svg_dir."""
 
     def __init__(self, svg_dir, domain, svg_names):
         self.svg_dir, self.domain = Path(svg_dir), domain
-        self.svg_names = svg_names  # sha1 du contenu → nom du SVG CNIG
+        self.svg_names = svg_names  # sha1 du contenu → nom déjà attribué (partagé entre domaines)
+        self.symbol_name = None  # nom du symbole en cours (code CNIG) : nom des pictos qu'il embarque
 
     # pictos -------------------------------------------------------------------------------------
 
-    def _svg_file(self, data, stem="qml"):
-        """Écrit un SVG ; nom du SVG CNIG de même contenu (préfixé psmv_ en PSMV), sinon <stem>_<sha1>.svg."""
+    def _svg_file(self, data, stem=None):
+        """Écrit un picto embarqué dans le style ; nommé d'après le code du symbole (PSC-L_15-00_001.svg, puis
+        _1, _2… si le nom est pris par un autre dessin), un même contenu gardant le nom qu'il a reçu en premier."""
         sha = hashlib.sha1(data).hexdigest()
-        cnig = self.svg_names.get(sha, {})
-        cnig_name = cnig.get(self.domain) or next(iter(cnig.values()), None)
-        if cnig_name is None:
-            name = f"{stem}_{sha[:12]}.svg"
-        elif self.domain == "psmv":
-            name = f"psmv_{cnig_name}"
-        else:
-            name = cnig_name
-        path = self.svg_dir / name
-        if not path.exists():
-            path.write_bytes(data)
+        if sha in self.svg_names:
+            return self.svg_names[sha]
+        base = (self.symbol_name or stem or "picto").replace("|", "__")
+        if stem:
+            base = f"{base}_{stem}"
+        taken = set(self.svg_names.values())
+        name, n = f"{base}.svg", 0
+        while name in taken or (self.svg_dir / name).exists():
+            n += 1
+            name = f"{base}_{n}.svg"
+        (self.svg_dir / name).write_bytes(data)
+        self.svg_names[sha] = name
         return name
 
     def graphic(self, layer, notes):
@@ -219,7 +223,7 @@ class Converter:
             if cls == "SvgMarker":
                 name = q.get("name") or ""
                 if not name.startswith("base64:"):
-                    notes.append(f"⚠ picto SVG externe « {name} » non embarqué dans le QML")
+                    notes.append(f"⚠ picto SVG externe « {name} » non embarqué dans le style")
                     return None, 0.0
                 fname = self._svg_file(base64.b64decode(name[7:]))
             else:
@@ -313,8 +317,9 @@ class Converter:
     }
 
     def symbolizers(self, symbol, notes, pitches):
-        """Symboliseurs SLD d'un <symbol> QML, dans l'ordre de dessin (ordre des couches du QML)."""
+        """Symboliseurs SLD d'un <symbol> QGIS, dans l'ordre de dessin (ordre de ses couches)."""
         fill_sign = -1 if symbol.get("type") == "fill" else 1
+        self.symbol_name = symbol.get("name")
         out = []
         for layer in symbol.findall("layer"):
             if not active(layer):
@@ -543,19 +548,6 @@ def hatch_graphic(lpf):
 
 
 # --- règles d'un QML -----------------------------------------------------------------------------
-
-
-def rule_filter(expression):
-    """Filtre QGIS des règles d'ASSIETTE_SUP_S → (suptype, {attribut: valeur}) ou None si non reconnu.
-    « lower(string_to_array(idass,'-')[0]) = 'a1' [AND typeass = '…' | IN (…)] »."""
-    expr = (expression or "").replace('"', "")
-    m = re.search(r"string_to_array\(\s*idass\s*,\s*'-'\s*\)\[0\]\)\s*=\s*'([^']+)'", expr)
-    if not m:
-        return None
-    attrs = dict(re.findall(r"(\w+)\s*=\s*'([^']*)'", expr[m.end() :]))
-    for name, values in re.findall(r"(\w+)\s+IN\s*\(([^)]*)\)", expr[m.end() :]):
-        attrs[name] = re.findall(r"'([^']*)'", values)
-    return m.group(1).lower(), attrs
 
 
 def ogc_conditions(suptype, attrs):

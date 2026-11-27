@@ -1,22 +1,19 @@
 # Construction des styles
 
-Comment `./run.sh` produit les SLD du GPU à partir du dépôt CNIG (mode d’emploi : [README](../README.md)). Les chemins `STYLES/…` et `COUCHES/…` sont relatifs au clone de gpu-entrepot (`GPU_DIR`). Le détail des conversions est dans les docstrings de `bin/qml2sld.py` et `bin/pattern_tiles.py`, les comportements de GeoServer contournés dans [geoserver.md](geoserver.md). La planche de contrôle est décrite à part : [planche.md](planche.md).
+Comment `./run.sh` produit les SLD du GPU à partir du dépôt CNIG (mode d’emploi : [README](../README.md)). Les chemins `STYLES/…` et `COUCHES/…` sont relatifs au clone de gpu-entrepot (`GPU_DIR`). Le détail des conversions est dans les docstrings de `bin/qgis2sld.py` et `bin/pattern_tiles.py`, les comportements de GeoServer contournés dans [geoserver.md](geoserver.md). La planche de contrôle est décrite à part : [planche.md](planche.md).
 
 ```mermaid
 flowchart LR
   subgraph CNIG["Dépôt CNIG : sous-module cnig/"]
     G[grilles CSV<br>codes, attributs métier, libellés]
-    Q[QML QGIS]
-    L[couches ArcGIS .lyrx]
-    S[SLD par code]
+    X[style XML QGIS<br>PLU_CNIG.xml…]
   end
   PROD[(gpu-entrepot GPU_DIR<br>STYLES, COUCHES)]
 
   G --> I[[cnig_index.py]] --> IDX[(cnig_index.json)]
-  IDX --> C[[convert_symbols.py<br>qml2sld · pattern_tiles]]
-  Q --> C
-  L -. étiquettes .-> C
-  S -. sous-codes identiques .-> C
+  IDX --> C[[convert_symbols.py<br>qgis2sld · pattern_tiles · wkt_marks]]
+  X --> C
+  T[ref/sup_assiettes.csv] -. règles SUP .-> C
   PROD -. polices .-> C
   C --> SLD[(un SLD par code<br>data/symbols/script)]
   C --> SVG[(pictos, tuiles<br>data/svg)]
@@ -31,27 +28,29 @@ flowchart LR
 
 ## Index des codes : `bin/cnig_index.py`
 
-Lit les grilles CSV du CNIG (`__outils-agp-python-gdb__`) et liste les 1 167 codes (`PSC-S_01-03_001`, `ZONE_U_001_pe`, `AC1|gen_classe|ass_mh`…) avec domaine, couche GPU, attributs métier, libellé, fichiers CNIG et empreinte.
+Lit les grilles CSV du CNIG (`__outils-agp-python-gdb__`) et liste les 1 167 codes (`PSC-S_01-03_001`, `ZONE_U_001_pe`, `AC1|gen_classe|ass_mh`…) avec domaine, couche GPU, attributs métier, libellé, style XML et empreinte (sha1 du symbole XML). Les codes du style XML absents des grilles (`SECTEUR_xx`, zones PSMV, PSMV `PSC-L/P_05`) sont ajoutés en « hors-grille ». Les variantes « transparent » (`_000`, 431 codes PLU) sont listées à part (`transparent` : pas de style produit, symbole XML vérifié invisible), avec les symboles `_000` du XML sans ligne de grille (`PSC-S_38-03_000`). Ni les QML ni le dossier `SLD/` du CNIG (SLD par code, SVG) ne sont lus.
 
 - Sortie : `data/cnig_index.json`, archivé en `data/cnig_index.<sha>.json` (versionné).
 - `--since <sha>` : codes ajoutés, modifiés, supprimés depuis une version antérieure (`data/cnig_diff.json`), utilisé par `./bump.sh`.
 
 ## Un SLD par code : `bin/convert_symbols.py`
 
-Pour chaque catégorie des QML CNIG (et chaque règle d’`ASSIETTE_SUP_S.qml`), écrit `data/symbols/script/<domaine>/<code>.sld` : une règle `symbole = <code>`, images en chemins relatifs vers `data/svg/`.
+Pour chaque symbole de la bibliothèque de styles QGIS du domaine (`PLU/QGIS/PLU_CNIG.xml`, `PSMV_CNIG.xml`, `SUP_CNIG.xml`, un symbole nommé par code), écrit `data/symbols/script/<domaine>/<code>.sld` : une règle `symbole = <code>`, images en chemins relatifs vers `data/svg/`. **Les QML ne sont pas lus** (ni par la conversion, ni par l’index, ni par le rendu QGIS de la planche).
 
-**Couches QML → symboliseurs SLD** (`qml2sld.py`) : les couches désactivées sont ignorées, l’ordre de dessin est celui du QML.
+**Règles d’assiette SUP** (jeu « classiques », filtres par attributs) : une par ligne de `ref/sup_assiettes.csv` (`suptype`, `attribut`, `valeur` → `code` SUP dont le symbole XML est repris), dans `data/symbols/script/sup_rules/`. La table a été établie une fois depuis les règles d’`ASSIETTE_SUP_S.qml`, appariées aux codes par leur type d’assiette (`ass_mh` ↔ `typeass = Monument historique`…) ; quand plusieurs codes conviennent, ils ont le même dessin XML. Ligne sans code (T8, aucun code dans la grille) : règle de production conservée. La table est complétée d’après les règles de `STYLES/SLDS/sup/sup/assiette_sup_s.sld` de production qu’elle ne couvrait pas (AR3 « Zone de prohibition 1 », T5bis), colonne `remarque`. À remplacer par des colonnes de `grille_sup.csv` si le CNIG les ajoute.
 
-| Couche QML | SLD |
+**Couches de symbole QGIS → symboliseurs SLD** (`qgis2sld.py`) : les couches désactivées sont ignorées, l’ordre de dessin est celui du symbole.
+
+| Couche de symbole QGIS | SLD |
 |------------|-----|
 | `SimpleLine` | `LineSymbolizer` : couleur, épaisseur (≥ 0,7 px), tireté, décalages |
-| `MarkerLine` | `LineSymbolizer` / `GraphicStroke` : picto répété au pas de l’intervalle QML |
+| `MarkerLine` | `LineSymbolizer` / `GraphicStroke` : picto répété au pas de l’intervalle QGIS |
 | `SimpleFill` | `PolygonSymbolizer` : aplat, contour |
 | `PointPatternFill` | `PolygonSymbolizer` / `GraphicFill` : trame de pictos |
 | `LinePatternFill` | `PolygonSymbolizer` / `GraphicFill` : hachures |
 | `CentroidFill` | `PointSymbolizer` au centroïde |
 | `SimpleMarker`, `FontMarker` | `Mark` (forme connue, `ttf://Police#0xNN`) |
-| `SvgMarker`, `EllipseMarker` | `ExternalGraphic` : SVG embarqué, renommé comme le SVG CNIG de même contenu, ou SVG généré ; un seul fichier par dessin (copies PLU / PSMV, même dessin à une autre échelle), sauf picto à contour d’échelle différente |
+| `SvgMarker`, `EllipseMarker` | `ExternalGraphic` : SVG embarqué dans le style XML, nommé d’après le code du symbole (`PSC-L_15-00_001.svg`, puis `_1`, `_2`…), ou SVG généré ; un seul fichier par dessin (copies PLU / PSMV, même dessin à une autre échelle), sauf picto à contour d’échelle différente |
 
 **Contournements de GeoServer** (`pattern_tiles.py`, raisons dans [geoserver.md](geoserver.md)) :
 
@@ -60,9 +59,9 @@ Pour chaque catégorie des QML CNIG (et chaque règle d’`ASSIETTE_SUP_S.qml`),
 
 **Pictos natifs** (`wkt_marks.py`) : un picto ponctuel (`PointSymbolizer`, dont le picto de début de ligne) devient une marque `wkt://` : tracé du SVG aplati, couleurs des paramètres de l’URL, aucune image à charger. Les pictos le long des lignes (`GraphicStroke`) et les tuiles de trame restent des SVG.
 
-**Étiquettes** : seuls les `.lyrx` en définissent. Leurs classes visibles dont le texte vient d’un champ (`$feature.typzone`) deviennent des `TextSymbolizer`. La police est prise dans `STYLES/data/fonts`, sinon dans le système, sinon remplacée par un substitut libre ; le halo d’une zone prend la couleur de la zone quand le `.lyrx` diverge (AUc).
+**Étiquettes** : aucune n’est produite. Le style XML n’a que des formats de texte (apparence : police, taille, couleurs, halo), sans réglage d’étiquette (champ, placement) ; les `.lyrx` ne sont pas lus. Chaque format de texte est signalé sur le code correspondant (`ZONE_U_001_txt` pour `ZONE_U_001_ge` et `_pe`), les formats sans code dans l’encadré de la planche.
 
-**Codes absents des QML** : symbole du code QML dont le SLD par code CNIG est identique, sinon du code principal (`tt-00`, ou à défaut le premier code QML du type ; en SUP, un code de la même servitude). À défaut, aucun style.
+**Codes absents du style XML** (5 en version 5a838ff : PSMV `PSC-S_26-01`, `PSC-L/P_97-00`, `PSC-L/P_97-01`) : symbole du code principal (`tt-00`, ou à défaut le premier code du type ; en SUP, un code de la même servitude). À défaut, aucun style.
 
 ## SLD par couche GPU : `bin/build_slds.py`
 
@@ -80,8 +79,7 @@ Assemble les SLD par code en deux jeux organisés comme `STYLES/SLDS` de gpu-ent
 - Tous les écarts au CNIG et à la production : `data/slds/DIFFERENCES.md`.
 - `--validate` : publication d’essai de chaque SLD sur le GeoServer local.
 
-## Particularités de la version CNIG 2a50e2c
+## Particularités du dépôt CNIG
 
 - Grilles PLU : colonne `etiquette` vide pour les sous-codes, l’étiquette complète passe dans `etq_total` (utilisée en repli).
-- Variantes `_000` « transparent » (symbole invisible) : écartées de l’index et de la conversion.
-- QML PLU regroupés par couche (`INFO_LIN.qml`… au lieu de `plu_inf_l.qml`…).
+- Variantes `_000` « transparent » (symbole invisible) : pas de style produit, listées à part dans l’index et dans les fiches de la planche.

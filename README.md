@@ -4,7 +4,7 @@ Styles GeoServer (SLD) du Géoportail de l’Urbanisme (GPU) pour les symboles C
 
 **→ [Planche de contrôle](https://floriancerizay.github.io/sg5-to-gpu/)**
 
-La planche confronte chaque symbole produit au catalogue PDF du CNIG, au rendu QGIS des QML CNIG et aux styles actuels du GPU, et liste les **problèmes du symbole d’origine** à remonter au CNIG. La conversion QML → SLD est faite ici (`bin/qml2sld.py`), sans retouche au cas par cas ni outil externe.
+La planche confronte chaque symbole produit au catalogue PDF du CNIG, au rendu QGIS des styles CNIG et aux styles actuels du GPU, et liste les **problèmes du symbole d’origine** à remonter au CNIG. La conversion des symboles QGIS en SLD est faite ici (`bin/qgis2sld.py`), sans retouche au cas par cas ni outil externe.
 
 ## Processus
 
@@ -12,8 +12,8 @@ La planche confronte chaque symbole produit au catalogue PDF du CNIG, au rendu Q
 flowchart LR
   G[grilles CNIG] --> I[[cnig_index.py]] --> IDX[(index des codes)]
   IDX --> C[[convert_symbols.py]]
-  Q[QML CNIG] --> C
-  L[.lyrx CNIG] -. étiquettes .-> C
+  X[style XML CNIG] --> C
+  T[ref/sup_assiettes.csv] -. règles SUP .-> C
   C --> B[[build_slds.py]]
   P[gpu-entrepot] --> B
   B --> OUT[(SLDS)]
@@ -36,7 +36,7 @@ cp .env.example .env                               # puis adapter GPU_DIR, GEOSE
 
 Prérequis système :
 
-- `ogr2ogr` (GDAL), `pdftoppm` / `pdftotext` (poppler-utils), `fc-list` / `fc-match` (fontconfig) ;
+- `ogr2ogr` (GDAL), `pdftoppm` / `pdftotext` (poppler-utils), `fc-match` (fontconfig) ;
 - **QGIS avec PyQGIS**, lancé par `/usr/bin/python3` (le `.venv` n’y a pas accès ; sinon `QGIS_PYTHON`) ;
 - **GeoServer local démarré** (testé avec 2.28), avec droits d’écriture sur `styles/` de son data_dir.
 
@@ -44,7 +44,7 @@ Prérequis système :
 
 ```bash
 ./run.sh                                  # chaîne complète (~3 min)
-./run.sh --from convert                   # après modification de qml2sld / pattern_tiles / convert_symbols
+./run.sh --from convert                   # après modification de qgis2sld / pattern_tiles / convert_symbols
 ./run.sh --from compare --sections plu_prescription,sup --skip-qgis   # essai rapide
 ```
 
@@ -65,12 +65,3 @@ Outre la planche, la chaîne produit dans `data/` (non versionné) :
 | `data/slds/` | SLD par couche GPU, organisés comme `STYLES/SLDS` de gpu-entrepot : `classiques/` (filtres par attributs métier) et `symboles/` (filtre `symbole = <code>`), avec `img/` et `fonts/` **à déployer avec eux** ; écarts aux styles de production dans `DIFFERENCES.md` |
 | `data/symbols/script/` | un SLD par code CNIG |
 | `data/symbols/issues.json`, `scores.json` | problèmes du symbole d’origine, écart au rendu QGIS par code |
-
-## Contribuer
-
-Style du code vérifié par [ruff](https://docs.astral.sh/ruff/) (règles dans `pyproject.toml`) :
-
-```bash
-.venv/bin/pip install ruff
-.venv/bin/ruff check bin config.py && .venv/bin/ruff format --check bin config.py
-```

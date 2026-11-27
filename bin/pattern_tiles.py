@@ -49,7 +49,7 @@ from sld import NS_OGC, NS_SLD, NS_XLINK, child, children, local
 
 MIN_TILE = 16.0  # px : en dessous, la tuile est répétée k × k fois
 MIN_JITTER_TILE = 96.0  # px : tuile d'une trame à points décalés aléatoirement (répétition peu visible)
-JITTER = "{urn:test-symbo}jitter"  # attribut interne posé par qml2sld
+JITTER = "{urn:test-symbo}jitter"  # attribut interne posé par qgis2sld
 MAX_TILE = 96.0  # px : borne de la recherche de k
 SAME_PITCH = 0.05  # écart relatif de pas en dessous duquel deux trames superposées sont fusionnées
 MAX_DASH_TILE = 320.0  # px : idem pour une hachure tiretée oblique (contrainte de période du tiret)

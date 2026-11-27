@@ -29,10 +29,8 @@ Mesurés sur le GeoServer local ; ils valent aussi pour les styles de production
 ## Limites
 
 - Les trames sont calées sur l’origine de l’image par GeoServer, sur l’objet par QGIS : même dessin, phase différente (l’écart mesuré en tient compte en partie).
-- `MarkerLine` à placement « au milieu de la ligne » non traduite (signalée si active). Seules occurrences CNIG : PSMV PSC-S_39-50 / 51, désactivées dans le QML. GeoServer saurait la rendre par un `TextSymbolizer` à `Graphic` (procédé des styles de production pour 39-50 / 51).
+- `MarkerLine` à placement « au milieu de la ligne » non traduite (signalée si active). Seules occurrences CNIG : PSMV PSC-S_39-50 / 51, désactivées dans le style XML. GeoServer saurait la rendre par un `TextSymbolizer` à `Graphic` (procédé des styles de production pour 39-50 / 51).
 - Picto du début de ligne ajouté seulement pour les pictos sans décalage latéral (1er tiret de PSC-L_25 absent).
 - Orientation des pictos sur un contour : réglée et vérifiée sur des anneaux extérieurs en sens horaire (convention ArcGIS des données de test) ; non vérifiée sur des anneaux saisis dans l’autre sens.
 - Marques de police hors trames et hachures tiretées à 45° peu denses restent rendues par GeoServer.
 - QGIS ne rend pas le tireté d’une hachure très dense (`sup:EL7|gen|ass`, tirets de 3 pt tous les 3 pt) : ses tirets se rejoignent en traits presque continus, alors que le catalogue montre bien un tireté. L’écart au rendu QGIS de ce code vient de QGIS, pas de la conversion.
-- QGIS n’affiche pas les étiquettes des zones `_ge` : leur écart mesuré est surestimé.
-- SLD par couche : sans style CNIG, `secteur_cc` et les PSMV `PSC-L_05` / `PSC-P_05` gardent les règles de production ; pas de SLD par symbole pour `secteur_cc`.

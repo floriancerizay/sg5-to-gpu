@@ -21,7 +21,6 @@ from xml.sax.saxutils import escape
 from lxml import etree
 
 NS_SLD = "http://www.opengis.net/sld"
-NS_SE = "http://www.opengis.net/se"
 NS_OGC = "http://www.opengis.net/ogc"
 NS_XLINK = "http://www.w3.org/1999/xlink"
 SYMBOLIZERS = ("PolygonSymbolizer", "LineSymbolizer", "PointSymbolizer", "TextSymbolizer")

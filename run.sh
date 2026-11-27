@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Styles GeoServer des symboles CNIG : conversion des QML (bin/qml2sld.py), rendu GeoServer / QGIS,
+# Styles GeoServer des symboles CNIG : conversion des symboles QGIS du CNIG (bin/qgis2sld.py), rendu GeoServer / QGIS,
 # SLD par couche GPU (data/slds), planche report/compare.html et problèmes du symbole d'origine
 # (data/symbols/issues.json). Détail des étapes : README.md.
 
@@ -101,7 +101,7 @@ fi
 
 # --- 3. Bibliothèque de symboles --------------------------------------------------------
 if run_step convert; then
-  echo "== 3/5 conversion des QML CNIG en SLD"
+  echo "== 3/5 conversion des symboles CNIG (styles XML) en SLD"
   "$PYTHON" bin/convert_symbols.py
 fi
 

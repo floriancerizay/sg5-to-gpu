@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-5. Rendu de référence QGIS : applique les QML CNIG aux couches de la grille de test (data/layer/compare.gpkg)
-et écrit une image par couche, avec la même emprise et la même résolution que les rendus GeoServer.
+5. Rendu de référence QGIS : applique les symboles des styles XML du CNIG (PLU_CNIG.xml…) aux couches de la grille
+de test (data/layer/compare.gpkg), en catégories sur le champ « symbole » (les QML ne sont pas lus), et écrit une
+image par couche, avec la même emprise et la même résolution que les rendus GeoServer.
 
 Lancé par bin/compare.py avec l'interpréteur PyQGIS (QGIS_PYTHON) : render_qgis.py <jobs.json>
-jobs.json : [{"gpkg", "layer", "qmls": [...], "bbox": [xmin, ymin, xmax, ymax], "size": [w, h], "out", "fonts"}]
+jobs.json : [{"gpkg", "layer", "style": xml, "bbox": [xmin, ymin, xmax, ymax], "size": [w, h], "out", "fonts"}]
 """
 
 import json
@@ -16,10 +17,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from qgis.core import (
     QgsApplication,
+    QgsCategorizedSymbolRenderer,
     QgsCoordinateReferenceSystem,
     QgsMapRendererCustomPainterJob,
     QgsMapSettings,
     QgsRectangle,
+    QgsRendererCategory,
+    QgsStyle,
     QgsVectorLayer,
 )
 from qgis.PyQt.QtCore import QSize, Qt
@@ -33,18 +37,26 @@ def load_fonts(dirs):
             QFontDatabase.addApplicationFont(str(f))
 
 
-def styled_layer(gpkg, name, qml):
-    """Couche `name` du GeoPackage, stylée par un QML CNIG."""
+def xml_layer(gpkg, name, style):
+    """Couche de la grille, en catégories « symbole » : symbole du style XML de même nom (code absent : non dessiné)."""
     layer = QgsVectorLayer(f"{gpkg}|layername={name}", name, "ogr")
-    msg, ok = layer.loadNamedStyle(str(qml))
-    if not ok:
-        print(f"  ⚠ {qml}: {msg}")
-    renderer = layer.renderer()
-    # Les QML CNIG classent sur SYMBOLE ; la grille porte le champ « symbole »
-    if renderer.type() == "categorizedSymbol":
-        renderer.setClassAttribute("symbole")
-    layer.setScaleBasedVisibility(False)
+    names = set(style.symbolNames()) if style else set()
+    values = sorted(str(v) for v in layer.uniqueValues(layer.fields().indexOf("symbole")))
+    cats = [QgsRendererCategory(v, style.symbol(v), v) for v in values if v in names]
+    layer.setRenderer(QgsCategorizedSymbolRenderer("symbole", cats))
     return layer
+
+
+def style_symbols(path):
+    """Bibliothèque de styles QGIS (XML) → QgsStyle, ou None."""
+    if not path or not Path(path).is_file():
+        return None
+    style = QgsStyle()
+    style.createMemoryDatabase()
+    if not style.importXml(str(path)):
+        print(f"  ⚠ {path}: bibliothèque de styles illisible")
+        return None
+    return style
 
 
 def main():
@@ -52,8 +64,12 @@ def main():
     app = QgsApplication([], False)
     app.initQgis()
     load_fonts(jobs[0].get("fonts", []) if jobs else [])
+    styles = {}  # chemin du XML → QgsStyle
     for job in jobs:
-        layers = [styled_layer(job["gpkg"], job["layer"], q) for q in job["qmls"]]
+        if job.get("style") not in styles:
+            styles[job.get("style")] = style_symbols(job.get("style"))
+        style = styles[job.get("style")]
+        layers = [xml_layer(job["gpkg"], job["layer"], style)]
         settings = QgsMapSettings()
         settings.setLayers(layers[::-1])
         settings.setDestinationCrs(QgsCoordinateReferenceSystem("EPSG:2154"))

@@ -8,7 +8,7 @@ rattachées aux codes de data/cnig_index.json :
   - fiches Zonage : deux vignettes (≥ 1:2500 = _ge, < 1:2500 = _pe), une seule pour le PSMV ;
   - fiches SUP : dessin sous l'en-tête « A5|gen_XX|ass », rattaché aux « Symboles concernés ».
 
-Sorties : report/cnig/*.png, report/cnig/plates.json ({"domaine:code": "fichier"}).
+Sorties : report/cnig/*.png (vignettes rattachées à un code), report/cnig/plates.json ({"domaine:code": "fichier"}).
 Prérequis : poppler-utils (pdftoppm, pdftotext).
 """
 
@@ -168,7 +168,8 @@ def plates_sup(img, lines, head, width):
 
 
 def extract(domain, pdf):
-    """Vignettes d'un catalogue, écrites dans OUT → {(genre, étiquette): nom du fichier}."""
+    """Vignettes d'un catalogue → {(genre, étiquette): (nom du fichier, image)} ; main n'écrit que celles
+    rattachées à un code."""
     found = {}
     with tempfile.TemporaryDirectory() as tmp:
         subprocess.run(["pdftoppm", "-r", str(DPI), "-png", str(pdf), f"{tmp}/p"], check=True)
@@ -192,9 +193,7 @@ def extract(domain, pdf):
             for key, picture in plates.items():
                 if picture is None:
                     continue
-                name = f"{domain}_{genre}_{re.sub(r'[^A-Za-z0-9_-]+', '_', key)}.png"
-                picture.save(PLATES_DIR / name)
-                found[(genre, key)] = name
+                found[(genre, key)] = (f"{domain}_{genre}_{re.sub(r'[^A-Za-z0-9_-]+', '_', key)}.png", picture)
     return found
 
 
@@ -226,7 +225,10 @@ def main():
                 continue
             key = plate_key(e, found)
             if key in found:
-                mapping[f"{domain}:{e['code']}"] = found[key]
+                name, picture = found[key]
+                if name not in mapping.values():
+                    picture.save(PLATES_DIR / name)  # seules les vignettes rattachées à un code sont écrites
+                mapping[f"{domain}:{e['code']}"] = name
                 attached += 1
         print(f"✅ {domain} : {len(found)} vignettes extraites, {attached} codes rattachés")
     write_json(PLATES_DIR / "plates.json", mapping)

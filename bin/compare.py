@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 5. Planche de comparaison des symboles CNIG, colonnes
-  attendu (catalogue PDF CNIG) | QGIS (QML CNIG) | Script | problèmes du symbole d'origine | prod actuelle
+  attendu (catalogue PDF CNIG) | QGIS (style CNIG) | Script | problèmes du symbole d'origine | prod actuelle
 
 1. Grille de test data/layer/compare.gpkg : une couche par (domaine, couche GPU), géométries des vignettes du
    catalogue (TEMPLATES, extraites des PDF vectoriels). Prescriptions et informations : une cellule par fiche
@@ -90,23 +90,6 @@ DEVIATION = 6.0
 MAX_SHIFT = 16  # px : décalage de phase des trames toléré par la métrique
 OUTLINE_BAND = 6  # px : bande autour du contour d'un polygone, comparée sans décalage
 PEAKS = 6  # maxima de corrélation essayés
-QML = {
-    ("plu", "info_lin"): ["PLU/QGIS/QML/INFO_LIN.qml"],
-    ("plu", "info_pct"): ["PLU/QGIS/QML/INFO_PCT.qml"],
-    ("plu", "info_surf"): ["PLU/QGIS/QML/INFO_SURF.qml"],
-    ("plu", "prescription_lin"): ["PLU/QGIS/QML/PRESCRIPTION_LIN.qml"],
-    ("plu", "prescription_pct"): ["PLU/QGIS/QML/PRESCRIPTION_PCT.qml"],
-    ("plu", "prescription_surf"): ["PLU/QGIS/QML/PRESCRIPTION_SURF.qml"],
-    ("plu", "zone_urba"): ["PLU/QGIS/QML/plu_zone_urba_pe.qml", "PLU/QGIS/QML/plu_zone_urba_ge.qml"],
-    ("psmv", "info_lin"): ["PSMV/QGIS/QML/psmv_inf_l.qml"],
-    ("psmv", "info_pct"): ["PSMV/QGIS/QML/psmv_inf_p.qml"],
-    ("psmv", "info_surf"): ["PSMV/QGIS/QML/psmv_inf_s.qml"],
-    ("psmv", "prescription_lin"): ["PSMV/QGIS/QML/psmv_psc_l.qml"],
-    ("psmv", "prescription_pct"): ["PSMV/QGIS/QML/psmv_psc_p.qml"],
-    ("psmv", "prescription_surf"): ["PSMV/QGIS/QML/psmv_psc_s.qml"],
-    ("psmv", "zone_urba"): ["PSMV/QGIS/QML/psmv_zone_urba.qml"],
-    ("sup", "symbole"): ["SUP/QGIS/QML/sup_ass.qml"],
-}
 # Titres des sections de la planche
 SECTION_TITLES = {
     "plu_prescription": "PLU · prescriptions",
@@ -486,7 +469,7 @@ def polygon_masks(name):
 
 
 def compute_scores(layers, img_dir):
-    """Écart au rendu QGIS par code (codes tirés directement d'un QML, cellule QGIS non vide)."""
+    """Écart au rendu QGIS par code (codes à symbole propre dans le style XML ; cellule QGIS non vide)."""
     idx = read_json(SCRIPT_DIR / "index.json")
     scores = {}
     for name, rows in layers.items():
@@ -568,66 +551,12 @@ def svg_summary(names):
 # Un message prend le premier type dont le motif apparaît ; l'ordre compte (« aucun style » avant « absent »).
 PROBLEM_TYPES = [
     ("no-style", "aucun style", "aucun style"),
-    ("absent", "code absent des QML, style d'un autre code", "absent des QML"),
-    ("label", "étiquettes (.lyrx, polices, halo)", "étiquette"),
-    ("conversion", "conversion incomplète", ("non traduit", "presque jointif", "pictogramme")),
+    ("absent", "code absent du style XML CNIG, style d'un autre code", "absent du style XML"),
+    ("label", "étiquettes (formats de texte sans réglage)", ("étiquette", "format de texte")),
+    ("render", "problème de rendu", ("non traduit", "presque jointif", "pictogramme", "écart au rendu QGIS")),
     ("font-mark", "marque de police", "marque de police"),
-    ("deviation", "écart au rendu QGIS", "écart au rendu QGIS"),
     ("no-plate", "sans vignette du catalogue", "pas de vignette"),
 ]
-
-
-# Recommandation affichée sous chaque problème : (motif reconnu dans le message, recommandation).
-# Le premier motif présent dans le message l'emporte : les plus précis d'abord.
-RECOMMENDATIONS = [
-    (
-        "aucun style",
-        "Ajouter une catégorie pour ce code dans le QML de sa couche, ou retirer le code s'il n'est plus utilisé.",
-    ),
-    (
-        "diffère de celui de",
-        "Ajouter une catégorie pour ce code dans le QML, après avoir vérifié lequel est juste : "
-        "le symbole du code principal ou le SLD par code du sous-code.",
-    ),
-    (
-        "style du code principal",
-        "Ajouter une catégorie pour ce code dans le QML, avec son propre symbole ou celui du code principal.",
-    ),
-    ("fichier SLD identique", "Ajouter une catégorie pour ce code dans le QML, avec le même symbole que son jumeau."),
-    ("étiquette reprise", "Définir l'étiquette dans le QML de zonage (champ typezone, halo de la couleur de la zone)."),
-    (
-        "texte constant",
-        "Décision CNIG : afficher la hauteur de chaque prescription (quel attribut ?), une valeur d'exemple, ou rien.",
-    ),
-    ("police d'étiquette", "Déposer le fichier de la police dans __Ressources du dépôt CNIG."),
-    ("halo", "Corriger le halo dans le .lyrx : couleur de la zone, comme le demande la spécification."),
-    (
-        "presque jointif",
-        "Réduire le picto ou augmenter le pas de la trame dans le QML, pour que les pictos ne se chevauchent pas.",
-    ),
-    ("non embarqué", "Embarquer le SVG dans le QML, ou le déposer dans le dépôt CNIG."),
-    ("non tradui", "Remplacer cet élément QGIS par un équivalent pris en charge par la conversion (docs/chaine.md)."),
-    ("manquant", "Déposer le pictogramme dans le dépôt CNIG."),
-    ("absent des SVG CNIG", "Déposer ce pictogramme en SVG dans le dépôt CNIG, avec les autres."),
-    (
-        "marque de police",
-        "Déposer la police dans __Ressources du dépôt CNIG, ou remplacer la marque par un pictogramme SVG.",
-    ),
-    (
-        "écart au rendu QGIS",
-        "Comparer les colonnes QGIS et script : un dessin différent vient de la conversion (sg5-to-gpu), "
-        "pas du symbole CNIG.",
-    ),
-    (
-        "pas de vignette",
-        "Ajouter une fiche pour ce code dans le catalogue, ou l'inclure dans la plage d'une fiche existante.",
-    ),
-]
-
-
-def recommendation(message):
-    """Recommandation pour un message de problème, ou None."""
-    return next((text for pattern, text in RECOMMENDATIONS if pattern in message), None)
 
 
 def problem_type(message):
@@ -651,10 +580,12 @@ def filter_options(counts, total):
 
 
 def problems(key, scores, issues, script):
-    """Problèmes d'un code : diagnostics de convert_symbols + écart au rendu QGIS → [{text, files}]."""
+    """Problèmes d'un code : diagnostics de convert_symbols + écart au rendu QGIS → [{text, files}].
+    L'écart n'est affiché que s'il est la seule erreur « ⚠ » du code : sinon, il découle le plus souvent de
+    l'erreur déjà signalée (étiquette, police, motif jointif…)."""
     out = [i if isinstance(i, dict) else {"text": i, "files": []} for i in issues.get(key, [])]
     d = scores.get(key)
-    if d is not None and d > DEVIATION:
+    if d is not None and d > DEVIATION and not any(i["text"].startswith("⚠") for i in out):
         entry = script.get(key, {})
         files = [[entry["source"], "symbole QGIS (rendu de référence)"]] if entry.get("source") else []
         if entry.get("file"):
@@ -706,18 +637,38 @@ def _files_html(files):
 
 def _problem_html(items, geometry=""):
     """Éléments de liste des remarques : pastille « ⚠ » / « ℹ », préfixe de géométrie, texte, fichiers en
-    infobulle, recommandation."""
+    infobulle."""
     out = []
     for item in items:
         icon, _, text = item["text"].partition(" ")
         css = "w" if icon == "⚠" else "i"
-        advice = recommendation(item["text"])
-        advice = f'<div class="reco">{html.escape(advice)}</div>' if advice else ""
         out.append(
             f'<li class="{css}"><span class="ico">{icon}</span><div>{geometry}{html.escape(text)}'
-            f"{_files_html(item.get('files'))}{advice}</div></li>"
+            f"{_files_html(item.get('files'))}</div></li>"
         )
     return "".join(out)
+
+
+GEOM_CODE = re.compile(r"\b(PSC|INF)-([SLP])_")
+
+
+def grouped_problems(found_items, sheet):
+    """Problèmes d'une fiche regroupés quand ils ne diffèrent que par la géométrie du code (PSC-S_… / PSC-P_…) :
+    [(préfixe de géométrie HTML, item)], texte du 1er code avec les géométries réunies (PSC-S/P_40-50…)."""
+    groups = {}
+    for geom, item in found_items:
+        key = GEOM_CODE.sub(r"\1-#_", item["text"])
+        g = groups.setdefault(key, {"geoms": [], "item": item, "files": []})
+        if geom and geom not in g["geoms"]:
+            g["geoms"].append(geom)
+        g["files"] += [f for f in item.get("files", []) if f not in g["files"]]
+    out = []
+    for key, g in groups.items():
+        geoms = sorted(g["geoms"], key="SLP".index)
+        text = key.replace("-#_", f"-{'/'.join(geoms) or '?'}_") if "-#_" in key else g["item"]["text"]
+        prefix = f'<span class="geom">{", ".join(GEOM_LETTER[x] for x in geoms)}</span>' if sheet and geoms else ""
+        out.append((prefix, {**g["item"], "text": text, "files": g["files"]}))
+    return out
 
 
 def plate(name):
@@ -727,8 +678,44 @@ def plate(name):
     return f'<td class="render"><div class="plate"><img src="cnig/{html.escape(name)}" alt=""></div></td>'
 
 
-def sheet_row(name, sec, group, images, plates, scores, issues, context):
-    """Ligne HTML d'une fiche → (html, remarques « ⚠ » / « ℹ » de la fiche, SVG chargés par ses styles)."""
+def source_tag(entry):
+    """Pastille d'un code sans symbole propre dans le style XML CNIG : « déduit » ou « aucun »."""
+    source = (entry or {}).get("source", "")
+    if source.startswith("="):
+        title = f"code absent du style XML : symbole de {html.escape(source[2:])}"
+        return f'<span class="src d" title="{title}">déduit</span>'
+    if not entry:
+        return '<span class="src d" title="aucun style CNIG">aucun</span>'
+    return ""
+
+
+TRANSPARENT_TITLE = (
+    "variante « transparent » de la grille : symbole invisible dans le style XML, aucune règle dans les SLD "
+    "(objet non dessiné)"
+)
+
+
+def transparent_by_group(index, sections):
+    """Variantes « transparent » (_000) rattachées à la 1re fiche de même type et sous-type : {(section, clé de
+    fiche) : [entrées]} (sans fiche du même type : non affichées)."""
+    first = {}
+    for name, sec in sections.items():
+        for g in sec["groups"]:
+            first.setdefault((name, g["key"].rsplit("_", 1)[0]), g["key"])
+    out = {}
+    for e in index.get("transparent", []):
+        a = e["attrs"]
+        tkey = f"{a.get('typepsc') or a.get('typeinf')}-{a.get('stypepsc') or a.get('stypeinf')}"
+        sec_name = f"{e['domain']}_{e['layer'].split('_')[0]}"
+        gkey = first.get((sec_name, tkey))
+        if gkey is not None:
+            out.setdefault((sec_name, gkey), []).append(e)
+    return out
+
+
+def sheet_row(name, sec, group, images, plates, scores, issues, context, transparent=()):
+    """Ligne HTML d'une fiche → (html, remarques « ⚠ » / « ℹ » de la fiche, SVG chargés par ses styles).
+    transparent : variantes « transparent » (_000) du même type et sous-type, listées sous les codes."""
     entries = [(layer, group["codes"][layer]) for layer in sec["layers"] if layer in group["codes"]]
     first = entries[0][1]
 
@@ -736,18 +723,27 @@ def sheet_row(name, sec, group, images, plates, scores, issues, context):
         """Étiquette « surf. », « lin. », « pct. » des fiches à plusieurs géométries."""
         return f'<span class="geom">{GEOM_LETTER[geom_of(layer)]}</span>' if sec["sheet"] else ""
 
-    codes = "".join(f"<div>{geometry(layer)}<code>{html.escape(row['code'])}</code></div>" for layer, row in entries)
     keys = [f"{row['domain']}:{row['code']}" for _, row in entries]
+    codes = "".join(
+        f"<div>{geometry(layer)}<code>{html.escape(row['code'])}</code>{source_tag(context[1].get(key))}</div>"
+        for (layer, row), key in zip(entries, keys, strict=True)
+    ) + "".join(
+        f"<div>{geometry(t['layer'])}<code>{html.escape(t['code'])}</code>"
+        f'<span class="src tr" title="{html.escape(TRANSPARENT_TITLE)}">transp.</span></div>'
+        for t in transparent
+    )
     vignette = next((plates[key] for key in keys if key in plates), None)
 
     index_entries, script = context
     svgs = fiche_svgs(keys, script)
-    detail, found = [], []
-    for (layer, _), key in zip(entries, keys, strict=True):
-        items = problems(key, scores, issues, script)
-        if items:
-            detail.append(_problem_html(items, geometry(layer)))
-            found += [i["text"] for i in items]
+    detail, found, found_items = [], [], []
+    for layer, key in [(layer, k) for (layer, _), k in zip(entries, keys, strict=True)] + [
+        (t["layer"], f"{t['domain']}:{t['code']}") for t in transparent
+    ]:
+        found_items += [(geom_of(layer), item) for item in problems(key, scores, issues, script)]
+    for prefix, item in grouped_problems(found_items, sec["sheet"]):
+        detail.append(_problem_html([item], prefix))
+        found.append(item["text"])
     if vignette is None:
         missing = no_plate([index_entries[key] for key in keys])
         detail.append(_problem_html([missing]))
@@ -777,10 +773,12 @@ def write_html(sections, images, scores, sha):
     Le filtre de la page propose chaque type de problème présent, avec son nombre de fiches."""
     plates = read_json(REPORT_DIR / "cnig/plates.json", {})
     issues = read_json(ISSUES, {})
+    cnig_index = read_json(CNIG_INDEX)
     context = (
-        {f"{e['domain']}:{e['code']}": e for e in read_json(CNIG_INDEX)["entries"]},
+        {f"{e['domain']}:{e['code']}": e for e in cnig_index["entries"]},
         read_json(SCRIPT_DIR / "index.json", {}),
     )
+    transparent = transparent_by_group(cnig_index, sections)
     ncols = 4 + len(VARIANTS)
     html_sections, nav = [], []
     totals = {"all": 0, "warn": 0, "note": 0}
@@ -789,7 +787,9 @@ def write_html(sections, images, scores, sha):
     for name, sec in sections.items():
         rows, n_warn, n_note, section_svgs = [], 0, 0, set()
         for group in sec["groups"]:
-            row, found, svgs = sheet_row(name, sec, group, images, plates, scores, issues, context)
+            row, found, svgs = sheet_row(
+                name, sec, group, images, plates, scores, issues, context, transparent.get((name, group["key"]), [])
+            )
             section_svgs.update(svgs)
             rows.append(row)
             n_warn += any(p.startswith("⚠") for p in found)
@@ -863,14 +863,14 @@ def main():
             style = f"{variant}_{name}"
             if style in styles:
                 getmap(name, style, box, size, img_dir / f"{style}.png")
-        domain, _, layer = name.partition("_")
-        qmls = QML.get((domain, layer))
-        if qmls and not args.skip_qgis:
+        domain = name.partition("_")[0]
+        xml = CNIG_DIR / f"{domain.upper()}/QGIS/{domain.upper()}_CNIG.xml"
+        if xml.is_file() and not args.skip_qgis:
             jobs.append(
                 {
                     "gpkg": str(GPKG),
                     "layer": name,
-                    "qmls": [str(CNIG_DIR / q) for q in qmls],
+                    "style": str(xml),
                     "bbox": box,
                     "size": size,
                     "out": str(img_dir / f"qgis_{name}.png"),

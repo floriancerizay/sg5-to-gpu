@@ -1,0 +1,84 @@
+suptype;attribut;valeur;code;remarque
+a1;;;A1|gen|ass;
+a2;;;A2|gen|ass;
+a3;;;A3|gen|ass;
+a4;;;A4|gen|ass;
+a5;;;A5|gen_eaupotable|ass;
+a6;;;A6|gen|ass;
+a7;;;A7|gen|ass;
+a8;;;A8|gen_montagne|ass;
+a9;;;A9|gen|ass;
+a10;;;A10|gen|ass;
+ac1;typeass;Périmètre des abords;AC1|gen_classe|ass_abor;
+ac1;typeass;Monument historique;AC1|gen_classe|ass_mh;
+ac2;type;Inscrit;AC2|gen_inscrit|ass;
+ac2;type;Classé;AC2|gen_classe|ass;
+ac3;;;AC3|gen_reservenatnationale|ass;
+ac4;;;AC4|gen|ass;
+ac4bis;;;AC4bis|gen|ass;
+ar1;;;AR1|gen|ass_sol;
+ar2;;;AR2|gen|ass_sol;
+ar3;typeass;Zone de prohibition 2;AR3|gen|ass_prohibition2;
+ar3;typeass;Zone de prohibition 1;AR3|gen|ass_prohibition1;ajouté d'après le SLD de production (STYLES/SLDS/sup/sup/assiette_sup_s.sld)
+ar3;typeass;Zone d'isolement;AR3|gen|ass_isolement;valeur tronquée à l'apostrophe dans la lecture du QML, rétablie
+ar4;;;AR4|gen|ass;
+ar5;;;AR5|gen|ass;
+ar6;;;AR6|gen|ass;
+as1;typeass;Périmètre de protection immédiate;AS1|gen_eaupotable|ass_immediat;
+as1;typeass;Périmètre de protection rapprochée;AS1|gen_eaupotable|ass_rapproche;
+as1;typeass;Périmètre de protection éloignée;AS1|gen_eaupotable|ass_eloigne;
+as1;typeass;Périmètre de protection eau minérale;AS1|gen_eauminerale|ass;
+as2;;;AS2|gen|ass;
+el2bis;;;EL2bis|gen|ass;
+el3;typeass;Halage;EL3|gen|ass_halage;
+el3;typeass;Marchepied;EL3|gen|ass_marchepied;
+el4;;;EL4|gen|ass_sol;
+el5;;;EL5|gen|ass;
+el6;;;EL6|gen|ass;
+el7;;;EL7|gen|ass;
+el8;;;EL8|gen|ass_sol;
+el9;;;EL9|gen_limdompubmaritim|ass;
+el10;;;EL10|gen|ass;
+el11;;;EL11|gen|ass;
+i1;;;I1|gen_canalgaz|ass;
+i2;;;I2|gen_pyloneturbine|ass;
+i3;typeass;Zone de protection;I3|gen_installannexegaz|ass_protection;
+i3;typeass;Zone de passage;I3|gen_canalgaz|ass_passage;
+i4;type;Aérien;I4|gen_cableaerien_inf45|ass;
+i4;type;Souterrain;I4|gen_cablesouterrain|ass;
+i5;;;I5|gen_canalisation|ass;
+i6;;;I6|gen|ass;
+i7;;;I7|gen|ass;
+i9;;;I9|gen|ass;
+i10;;;I10|gen|ass;
+int1;;;INT1|gen|ass;
+js1;;;JS1|gen|ass;
+pm1;;;PM1|gen_pprnp|ass;
+pm1bis;;;PM1bis|gen|ass;
+pm2;;;PM2|gen_icpe|ass;
+pm3;;;PM3|gen|ass;
+pm4;;;PM4|gen|ass;
+pm5;;;PM5|gen|ass;
+pm6;;;PM6|gen|ass;
+pm7;;;PM7|gen|ass;
+pm8;;;PM8|gen_pointdeau|ass;
+pt1;typeass;Zone de protection;PT1|gen_niveau1|ass_protection;
+pt1;typeass;Zone de garde;PT1|gen_niveau1|ass_garde;
+pt2;typeass;Zone primaire de dégagement;PT2|gen|ass_primaire_sol;
+pt2;typeass;Zone secondaire de dégagement;PT2|gen|ass_secondaire_sol;
+pt2;typeass;Zone spéciale de dégagement;PT2|gen|ass_speciale_sol;
+pt2;typeass;Secteur de dégagement;PT2|gen|ass_secteur_sol;
+pt3;;;PT3|gen|ass;
+t1;;;T1|gen_passageniveau|ass;
+t2;;;T2|gen|ass_sol;
+t3;;;T3|gen|ass;
+t4;;;T4|gen|ass_sol;
+t5;;;T5|gen|ass_sol;
+t5bis;;;T5bis|gen|ass_sol;ajouté d'après le SLD de production (STYLES/SLDS/sup/sup/assiette_sup_s.sld)
+t6;;;T6|gen|ass;
+t7;;;T7|gen|ass_sol;
+t8;typeass;Zone primaire de dégagement;;aucun code SUP : règle de production conservée
+t8;typeass;Zone secondaire de dégagement;;aucun code SUP : règle de production conservée
+t8;typeass;Zone spéciale de dégagement;;aucun code SUP : règle de production conservée
+t8;typeass;Secteur de dégagement;;aucun code SUP : règle de production conservée
+t9;;;T9|gen|ass_passage;

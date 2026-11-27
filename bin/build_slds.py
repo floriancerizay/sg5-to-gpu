@@ -47,7 +47,7 @@ from config import (
     SVG_DIR,
     read_json,
 )
-from qml2sld import ogc_conditions
+from qgis2sld import ogc_conditions
 
 DOMAIN_SUFFIX = {"plu": "du", "psmv": "psmv"}
 # couche GPU → (attribut du type, attribut du sous-type)
@@ -196,7 +196,7 @@ def _branches(flt):
 
 
 def prod_rules(layer, covered_types, out_name):
-    """Règles de production d'une couche non couvertes par le CNIG (type absent des QML) : conservées, filtre
+    """Règles de production d'une couche non couvertes par le CNIG (type absent du style CNIG) : conservées, filtre
     réduit aux valeurs non couvertes ; règles d'exclusion (« autres ») abandonnées."""
     path = STYLES_DIR / "data/du" / f"{layer}.sld"
     if not path.is_file():
@@ -368,7 +368,6 @@ def build_sup(index, styles, sup_rules):
     for e in index:
         if e["domain"] == "sup":
             codes.setdefault(e["attrs"]["suptype"], []).append(e)
-    seen_scale = set()
     for row in rows:
         base = row["nom"]
         suptypes = [s.strip().lower() for s in row["tables_sup_cat"].split(",") if s.strip()]
@@ -380,16 +379,10 @@ def build_sup(index, styles, sup_rules):
             for st in members:
                 scale = prod_sup_scale(st)
                 if table == "assiette_sup_s" and st in cnig:
-                    for r in cnig[st]:
-                        classic.append(
-                            rule(r["label"], r["label"], _and(ogc_conditions(st, r["attrs"])), symbolizers(r), scale)
-                        )
-                        if st not in seen_scale and str(r.get("max_scale") or "") != str(scale[1] or ""):
-                            NOTES["Échelles"].append(
-                                f"SUP {st} : QML 1:{r.get('max_scale') or '—'} max, production "
-                                f"{scale[0] or '—'} – {scale[1] or '—'} (production gardée)"
-                            )
-                            seen_scale.add(st)
+                    classic.extend(
+                        rule(r["label"], r["label"], _and(ogc_conditions(st, r["attrs"])), symbolizers(r), scale)
+                        for r in cnig[st]
+                    )
                 else:
                     frag = prod_sup_fragment(st, table)
                     if frag:

@@ -52,6 +52,9 @@ GEOMETRY_NAME = os.getenv("GEOMETRY_NAME", "the_geom")
 # car 24 pictos de production portent le nom d'un SVG CNIG au dessin différent
 SLD_IMG_URL = os.getenv("SLD_IMG_URL", "https://data.geopf.fr/annexes/gpu/geoserver/images/cnig/")
 
+# Table des règles d'assiette SUP (jeu « classiques ») : suptype, attribut, valeur → code SUP dont le symbole est repris
+SUP_ASSIETTES = ROOT / "ref/sup_assiettes.csv"
+
 # --- Production GPU : clone de gpu-entrepot (GPU_DIR, obligatoire ; relatif à la racine du dépôt) ---
 #   STYLES/data/du, STYLES/data/sup     SLD de production : référence de la planche, règles conservées
 #   STYLES/data/fonts                   pictogrammes et polices de production
